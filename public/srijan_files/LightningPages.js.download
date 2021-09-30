@@ -1,0 +1,2 @@
+
+angular.module("Wizdom365.LightningPages",[]);angular.module("Wizdom365").requires.push("Wizdom365.LightningPages");angular.module("Wizdom365").run(["$templateCache",function($templateCache){if($templateCache.get('LightningPages/Templates/ViewTemplates/index.html')==null)$templateCache.put('LightningPages/Templates/ViewTemplates/index.html','<!DOCTYPE html>\r\n<html>\r\n<head>\r\n    <title></title>\r\n <meta charset=\"utf-8\" />\r\n</head>\r\n<body>\r\n\r\n</body>\r\n</html>\r\n');}]);

@@ -1,0 +1,4043 @@
+(function () {
+  function dbNoticeboardDirective(window, log, filter) {
+    return {
+      scope: {
+        webpartId: "=?",
+      },
+      template: `<div class="bootstrap-wrapper" ng-class="responsiveClass"> <div class="wd-noticeboard"><a id="{{::webpartId}}" style="position: relative; top: -150px;"></a> <div class="editmode-button" ng-if="::editMode"> <div class="webpart-edit-button-container"> <button class="editWebpartButton btn" ng-click="editWebpart()" type="button" title="{{'Edit Webpart' | translate}}" > <span class="ms-Icon ms-Icon--Edit"></span ><span class="editWebpartButtonText">{{'Edit' | translate}}</span ></button > </div></div><div ng-if="needToConfigureWebpart">{{'Please configure the web part' | translate}}</div><div wizdom-include="::view.extendedProperties.overviewTemplate"></div></div></div>`,
+      controller: dbNoticeboardController,
+    };
+  }
+  function dbNoticeboardController(
+    rootScope,
+    scope,
+    element,
+    attrs,
+    webpartPropertiesService,
+    contextInfo,
+    noticeboardApi,
+    localStorageService,
+    interval,
+    window,
+    configuration,
+    modal,
+    log,
+    socialNotificationService,
+    responsive,
+    query,
+    filter
+  ) {
+    function init() {
+      scope.editMode = webpartPropertiesService.isInEditMode(element);
+      scope.webpartId =
+        scope.webpartId || webpartPropertiesService.getWebpartId(element);
+      scope.webpartProperties = attrs.webpartProperties
+        ? JSON.parse(attrs.webpartProperties)
+        : {};
+      scope.isEvent =
+        scope.webpartProperties &&
+        scope.webpartProperties.extendedProperties &&
+        scope.webpartProperties.extendedProperties.overviewTemplate &&
+        scope.webpartProperties.extendedProperties.overviewTemplate
+          .toLowerCase()
+          .includes("event");
+      webpartPropertiesService.hideEditCode(element);
+    }
+    function initialize() {
+      if (scope.editMode && null == scope.webpartProperties.channelSetId) {
+        noticeboardApi.views
+          .getViewById(scope.webpartId)
+          .then(function (attrs) {
+            if (attrs) {
+              attrs.editableByCurrentUser = null;
+              webpartPropertiesService.setProperties(scope.webpartId, attrs);
+            }
+          });
+      }
+    }
+    function editNewsItem(e) {
+      if (null != e && "number" == typeof e) {
+        scope.editNewsItem(e);
+      }
+    }
+    function render(t) {
+      scope.selection = t;
+      scope.unreadActionTooltip =
+        "Unread" == t
+          ? " (" + filter("translate")("click to show all elements") + ")"
+          : " (" +
+          filter("translate")("click to show unread elements only") +
+          ")";
+      if ("All" === t) {
+        scope.filters.path = scope.isEvent ? "current/future" : "current";
+      } else {
+        if ("Unread" === t) {
+          scope.filters.path = "current/unread";
+        } else {
+          if ("Mine" === t) {
+            scope.filters.path = "archived/current/future/mine";
+          }
+        }
+      }
+      if (
+        scope.webpartProperties.extendedProperties &&
+        scope.webpartProperties.extendedProperties.itemsPerPage
+      ) {
+        scope.filters.itemsPerPage =
+          scope.webpartProperties.extendedProperties.itemsPerPage;
+      } else {
+        if (localStorageService.getItem("nbItemsPerPage" + scope.webpartId)) {
+          scope.filters.itemsPerPage = localStorageService.getItem(
+            "nbItemsPerPage" + scope.webpartId
+          );
+        }
+      }
+      if (!scope.isEvent) {
+        scope.filters.path += "?$take=" + scope.filters.itemsPerPage;
+        scope.filters.path +=
+          "&$skip=" + scope.currentPage * scope.filters.itemsPerPage;
+      }
+      var n = noticeboardApi.views
+        .getItems(scope.webpartId, scope.filters.path)
+        .then(function (data) {
+          return (
+            (scope.items = data.items
+              ? !scope.isEvent || "Mine" === t
+                ? data.items
+                : data.items
+                  .sort(function (a, b) {
+                    return new Date(a.startDate) - new Date(b.startDate);
+                  })
+                  .slice(0, scope.filters.itemsPerPage)
+              : []),
+            (scope.items = scope.items.filter(function (s) {
+              return s.contentType.id <= 4;
+            })),
+            (scope.count = data.count),
+            scope.count <= scope.filters.itemsPerPage && scope.currentPage > 0
+              ? ((scope.currentPage = 0), void render(t))
+              : ((scope.restartingTimer = false),
+                void (scope.totalPageableIds = data.pageableIds
+                  ? !scope.isEvent
+                    ? data.pageableIds
+                    : scope.items.map(function (a) {
+                      return a.id;
+                    })
+                  : 0))
+          );
+        });
+
+      if (!scope.scrollTo) {
+        scope.scrollTo = document.getElementById(scope.webpartId);
+      }
+
+      return (runv = t), n;
+    }
+    function register() {
+      var font = localStorageService.getItem("nbSelect" + scope.webpartId);
+      if (null != font) {
+        render(font);
+      }
+      if (scope.webpartProperties.channelSetId) {
+        tryRender(scope.webpartProperties);
+      } else {
+        noticeboardApi.views
+          .getViewById(scope.webpartId)
+          .then(function (webpartProperties) {
+            tryRender(webpartProperties);
+          });
+      }
+      noticeboardPostSurveyService();
+      if (!T) {
+        T = true;
+        responsive.onResponsizeChange(element, function (pirates) {
+          scope.responsiveClass = pirates;
+          scope.$applyAsync();
+        });
+      }
+    }
+    function tryRender(webpartProperties) {
+      scope.view = webpartProperties;
+      if (!scope.view) {
+        scope.needToConfigureWebpart = true;
+      }
+      var n = localStorageService.getItem("nbSelect" + scope.webpartId);
+      if (scope.view) {
+        if (
+          null == n &&
+          scope.view.extendedProperties &&
+          scope.view.extendedProperties.defaultSelection
+        ) {
+          render(scope.view.extendedProperties.defaultSelection);
+        }
+        localStorageService.setItem(
+          "nbItemsPerPage" + scope.webpartId,
+          scope.view.extendedProperties.itemsPerPage
+        );
+        callback();
+      }
+      if (!document.displayNoticeboardNewsIdOnPageLoad) {
+        if ((document.displayNoticeboardNewsIdOnPageLoad = format("newsId"))) {
+          scope.ShowItem(document.displayNoticeboardNewsIdOnPageLoad);
+        }
+      }
+    }
+    function noticeboardPostSurveyService() {
+      noticeboardApi.notifications
+        .getOverview(scope.webpartId)
+        .then(function (PostSurveyService) {
+          scope.channelIds = PostSurveyService.channelIds;
+          scope.unreadComments = PostSurveyService.unreadComments || [];
+          scope.unreadCommentsCount = scope.unreadComments.length;
+          scope.unreadNews = PostSurveyService.unreadNews || [];
+          scope.unreadNewsCount = scope.unreadNews.length;
+        });
+    }
+    function format(index) {
+      var href = window.location.href;
+      index = index.replace(/[\[\]]/g, "\\$&");
+      var exp = new RegExp("[?&]" + index + "(=([^&#]*)|&|#|$)");
+      var field = exp.exec(href);
+      return field
+        ? field[2]
+          ? decodeURIComponent(field[2].replace(/\+/g, " "))
+          : ""
+        : null;
+    }
+    init();
+    initialize();
+    scope.dataReady = false;
+    scope.socialFeatureEnabled = configuration.Noticeboard
+      ? $.parseJSON(configuration.Noticeboard.SocialFeature.Enabled)
+      : false;
+    scope.enableSocialOnOldItems = configuration.Noticeboard
+      ? $.parseJSON(
+        configuration.Noticeboard.SocialFeature.EnableSocialOnItemByDefault
+      )
+      : false;
+    scope.enableSocialOnItemByDefault = configuration.Noticeboard
+      ? $.parseJSON(
+        configuration.Noticeboard.SocialFeature.EnableSocialOnItemByDefault
+      )
+      : false;
+    scope.socialOverviewComments = configuration.Noticeboard
+      ? $.parseJSON(configuration.Noticeboard.SocialFeature.OverviewComments)
+      : false;
+    scope.scrollTo = null;
+    scope.view = null;
+    scope.needToConfigureWebpart = false;
+    scope.items = [];
+    scope.count = 0;
+    scope.currentPage = 0;
+    scope.unreadNews = [];
+    scope.unreadNewsCount = 0;
+    scope.unreadComments = [];
+    scope.unreadCommentsCount = 0;
+    scope.listenerExist = false;
+    scope.autoUpdatesRunning = true;
+    scope.restartingTimer = false;
+    scope.channelIds = [];
+    scope.filters = {
+      path: "",
+      itemsPerPage: 5,
+    };
+    scope.$on("NoticeboardNewsItemRead", function (
+      canCreateDiscussions,
+      searchLyrInfo
+    ) {
+      var feedItem = _.find(scope.items, function (opLyrInfo) {
+        return opLyrInfo.id === searchLyrInfo.id;
+      });
+      if (feedItem) {
+        feedItem.isRead = true;
+      }
+      if ("Unread" == scope.selection) {
+        render(scope.selection);
+      }
+      _.remove(scope.unreadNews, function (opLyrInfo) {
+        return opLyrInfo.id === searchLyrInfo.id;
+      });
+      scope.unreadNewsCount = scope.unreadNews.length;
+    });
+    scope.$on("NoticeboardNewsItemUnread", function (
+      canCreateDiscussions,
+      data
+    ) {
+      var feedItem = _.find(scope.items, function (depMap) {
+        return depMap.id === data.id;
+      });
+      if (feedItem) {
+        feedItem.isRead = false;
+      }
+      var o = [];
+      _.forEach(data.channels, function (result) {
+        return o.push(result.id);
+      });
+      var keys = _.intersection(o, scope.channelIds);
+      if (keys.length > 0) {
+        if ("Unread" == scope.selection) {
+          scope.items.push(data);
+          var lists = _.sortBy(scope.items, function (singleAppData) {
+            return singleAppData.startDate;
+          }).reverse();
+          scope.items = lists;
+        }
+        scope.unreadNews.push(data);
+        scope.unreadNewsCount = scope.unreadNews.length;
+      }
+    });
+    scope.$on("NoticeboardNewsAllRead", function () {
+      _.forEach(scope.items, function (searchLyrInfo) {
+        searchLyrInfo.isRead = true;
+        _.remove(scope.unreadNews, function (opLyrInfo) {
+          return opLyrInfo.id === searchLyrInfo.id;
+        });
+      });
+      scope.unreadNewsCount = scope.unreadNews.length;
+    });
+    scope.$on("NoticeboardNewsItemCreated", function (
+      canCreateDiscussions,
+      isSlidingUp
+    ) {
+      register();
+    });
+    scope.$on("NoticeboardNewsItemEdited", function (
+      canCreateDiscussions,
+      isSlidingUp
+    ) {
+      register();
+    });
+    scope.$on("NoticeboardCommentRead", function (
+      canCreateDiscussions,
+      searchLyrInfo
+    ) {
+      _.remove(scope.unreadComments, function (opLyrInfo) {
+        return opLyrInfo.id === searchLyrInfo.id;
+      });
+      scope.unreadCommentsCount = scope.unreadComments.length;
+    });
+    scope.checkIfNewPublished = function (publishDate) {
+      return new Date() > new Date(publishDate);
+    };
+    scope.editWebpart = function () {
+      modal
+        .open({
+          templateUrl: "Noticeboard/Templates/Dialogs/EditWebpart.html",
+          controller: "Wizdom365NoticeboardEditWebpartController",
+          windowClass: "bootstrap-wrapper",
+          resolve: {
+            webpartId: function () {
+              return scope.webpartId;
+            },
+          },
+        })
+        .result.then(function (canCreateDiscussions) {
+          noticeboardApi.views
+            .getViewById(scope.webpartId)
+            .then(function (template) {
+              scope.view = template;
+              template.editableByCurrentUser = null;
+              webpartPropertiesService.setProperties(scope.webpartId, template);
+              register();
+            });
+        });
+    };
+    scope.ShowItem = function (val) {
+      modal
+        .open({
+          templateUrl: scope.view.extendedProperties.showItemTemplate,
+          controller: "Wizdom365NoticeboardShowNewsController",
+          windowClass: "bootstrap-wrapper",
+          size: "lg",
+          resolve: {
+            webpartId: function () {
+              return scope.webpartId;
+            },
+            item: function () {
+              var child = _.find(scope.items, {
+                id: val,
+              });
+              if (child) {
+                return child;
+              }
+              var dfd = query.defer();
+              return (
+                noticeboardApi.views
+                  .getItem(scope.webpartId, val)
+                  .then(function (results) {
+                    if (results.status) {
+                      dfd.resolve(results.newsItem);
+                    } else {
+                      dfd.reject();
+                    }
+                  }),
+                dfd.promise
+              );
+            },
+            pageableIds: function () {
+              return (
+                scope.totalPageableIds || (scope.totalPageableIds = []),
+                scope.totalPageableIds.length < 1 &&
+                _.each(scope.unreadComments, function (relationItem) {
+                  scope.totalPageableIds.push(relationItem.id);
+                }),
+                scope.totalPageableIds
+              );
+            },
+            itemInfo: function () {
+              return {
+                itemId: val,
+                shouldNotMarkRead: true,
+              };
+            },
+          },
+        })
+        .result.then(editNewsItem, editNewsItem);
+    };
+    scope.changeDisplayMode = function (v) {
+      scope.currentPage = 0;
+      scope.count = 0;
+      localStorageService.setItem("nbSelect" + scope.webpartId, v);
+      render(v);
+      scope.showSettings = false;
+    };
+    scope.toggleDisplayMode = function () {
+      scope.currentPage = 0;
+      scope.count = 0;
+      render("Unread" == scope.selection ? "All" : "Unread");
+    };
+    scope.filter = function (options) {
+      return "Unread" == scope.selection ? !options.isRead : true;
+    };
+    scope.changeReadStatus = function (self) {
+      var i = !self.isRead;
+      var date = new Date().toJSON();
+      if (i) {
+        noticeboardApi.items.markRead(self.id).then(function () {
+          if (date > self.endDate || date < self.startDate) {
+            scope.$broadcast("NoticeboardNewsItemRead", self);
+          } else {
+            rootScope.$broadcast("NoticeboardNewsItemRead", self);
+          }
+        });
+      } else {
+        noticeboardApi.items.markUnread(self.id).then(function () {
+          if (date > self.endDate || date < self.startDate) {
+            scope.$broadcast("NoticeboardNewsItemUnread", self);
+          } else {
+            rootScope.$broadcast("NoticeboardNewsItemUnread", self);
+          }
+        });
+      }
+    };
+    scope.changeReadStatusForAll = function () {
+      noticeboardApi.items
+        .markAllRead(
+          _.map(scope.unreadNews, function (timeline_mode) {
+            return timeline_mode.id;
+          })
+        )
+        .then(function () {
+          _.forEach(scope.unreadNews, function (featureLayer) {
+            noticeboardApi.items.markRead(featureLayer.id).then(function () {
+              rootScope.$broadcast("NoticeboardNewsItemRead", featureLayer);
+            });
+          });
+        });
+    };
+    scope.selectPersonalChannels = function () {
+      modal
+        .open({
+          templateUrl:
+            "Noticeboard/Templates/Dialogs/DanskeEditNoticeboardFeed.html",
+          controller: "DanskeNoticeboardChooseChannelsController",
+          windowClass: "bootstrap-wrapper",
+          resolve: {
+            viewId: function () {
+              return scope.webpartId;
+            },
+          },
+        })
+        .result.then(function (canCreateDiscussions) {
+          register();
+        });
+    };
+    scope.setPage = function (newPage) {
+      scope.currentPage = newPage;
+      render(scope.selection);
+
+      if (scope.scrollTo) {
+        scope.scrollTo.scrollIntoView();
+      }
+    };
+    var runv = "";
+    var callback = function () {
+      scope.archiveLink = "";
+      if (
+        scope.view.extendedProperties.archiveUrl &&
+        "" !== scope.view.extendedProperties.archiveUrl
+      ) {
+        scope.archiveLink = scope.view.extendedProperties.archiveUrl;
+      } else {
+        scope.archiveLink = configuration.Noticeboard.ArchiveUrl;
+      }
+    };
+    scope.goToArchive = function () {
+      window.location.href = scope.archiveLink;
+    };
+    var saveTimeout;
+    var T = false;
+    scope.startAutoUpdateTimer = function () {
+      register();
+      scope.autoUpdatesRunning = true;
+      if (saveTimeout) {
+        interval.cancel(saveTimeout);
+      }
+      var totalAreas = 5;
+      saveTimeout = interval(function () {
+        scope.autoUpdatesRunning = totalAreas > 0;
+        if (scope.autoUpdatesRunning) {
+          register();
+        }
+        totalAreas--;
+      }, 6e5);
+    };
+    scope.startAutoUpdateTimer();
+    scope.reStartAutoUpdateTimer = function () {
+      scope.restartingTimer = true;
+      scope.startAutoUpdateTimer();
+    };
+    scope.$on("$destroy", function (canCreateDiscussions) {
+      interval.cancel(saveTimeout);
+    });
+    scope.createNews = function () {
+      modal
+        .open({
+          templateUrl: scope.isEvent
+            ? "Noticeboard/Templates/Dialogs/DanskeCreateEvent.html"
+            : "Noticeboard/Templates/Dialogs/DanskeCreateLocalNew.html",
+          controller: "DanskeNoticeboardCreateItemController",
+          windowClass: "bootstrap-wrapper noticeboard-newform-modal",
+          size: "lg",
+          resolve: {
+            webpartId: function () {
+              return scope.webpartId;
+            },
+            itemId: function () {
+              return null;
+            },
+            template: function () {
+              return {
+                news: scope.view.extendedProperties.createEditNewsTemplate,
+                video: scope.view.extendedProperties.createEditVideoTemplate,
+              };
+            },
+          },
+        })
+        .result.then(function (loadingState) {
+          rootScope.$broadcast("NoticeboardNewsItemCreated", loadingState);
+        });
+    };
+    scope.editNewsItem = function (a22) {
+      modal
+        .open({
+          templateUrl: scope.isEvent
+            ? "Noticeboard/Templates/Dialogs/DanskeCreateEvent.html"
+            : "Noticeboard/Templates/Dialogs/DanskeCreateLocalNew.html",
+          controller: "DanskeNoticeboardCreateItemController",
+          windowClass: "bootstrap-wrapper noticeboard-editform-modal",
+          size: "lg",
+          resolve: {
+            webpartId: function () {
+              return scope.webpartId;
+            },
+            itemId: function () {
+              return a22;
+            },
+            template: function () {
+              return {
+                news: scope.view.extendedProperties.createEditNewsTemplate,
+                video: scope.view.extendedProperties.createEditVideoTemplate,
+              };
+            },
+          },
+        })
+        .result.then(function (loadingState) {
+          rootScope.$broadcast("NoticeboardNewsItemEdited", loadingState);
+        });
+    };
+    scope.showUnreadComments = function () {
+      modal
+        .open({
+          template:
+            '<div class="bootstrap-wrapper wt-noticeboard-unread-comments"><div class="modal-header"><button type="button" class="close closebtn" data-dismiss="modal" data-ng-click="cancel()" aria-hidden="true">&times;</button><h1 class="modal-title"><span class="wizdom-icon icon-bubble-2">&nbsp;{{\'Unread comments\' | translate}}</span></h1></div><div class="modal-body"><div ng-show="mode == \'loading\'" class="container-fluid"><div class="row"><div class="col-sm-12">{{\'loading\' | translate}}</div></div></div><div ng-show="mode == \'nodata\'"><div class="alert alert-warning" role="alert">{{\'No new comments.\' | translate}}</div></div><div ng-show="mode == \'dataLoaded\'"><button type="button" class="btn btn-primary pull-right" ng-click="dismissAll();">{{\'Dismiss all\' | translate}}</button><div class="wizdom-unreadComment-topSpace"></div><hr class="wizdom-unreadComment-horisontalDevider"><span ng-repeat="item in itemList" wizdom-include="::\'commentsSummary\'"></span><div class="wizdom-unreadComment-bottomSpace"></div><script type="text/ng-template" id="commentsSummary"><div class="wizdom-unreadComment-table"> <div class="wizdom-unreadComment-imgColumn"> <div style="display:inline-block" class="presence" db-presence-picture="" size="AVATAR" accountname="::item.displayUser.loginName" name="::item.displayUser.displayName"></div> </div> <div class="wizdom-unreadComment-txtColumn"> <span style="display:inline-block; top: 0;" class="presence" db-presence-picture="" type="defaultrender" size="EXTRASMALL" accountname="::item.displayUser.loginName" name="::item.displayUser.displayName"> </span> {{::item.displayText}} <span class="media-heading wd-noticeboard-media-heading anchored" ng-click="openItem(item.id);">{{::item.heading}}</span> <br /> <span class="wt-commentDate" am-time-ago="(item.displayDate | wizdom365FormatDate)"></span> </div> <div class="wizdom-unreadComment-iconColumn"> <label ng-click="dismiss(item);"><span class="glyphicon glyphicon-remove"></span> <a href="">{{\'Dismiss\' | translate}}</a></label> </div> </div> <hr class="wizdom-unreadComment-horisontalDevider" />\x3c/script></div></div><div class="modal-footer"><button type="button" class="btn btn-default" ng-click="cancel();">{{\'Back to news view\' | translate}}</button></div></div>',
+          controller: "Wizdom365NoticeboardCommentsOverviewController",
+          windowClass: "bootstrap-wrapper",
+          size: "lg",
+          resolve: {
+            unreadComments: function () {
+              return scope.unreadComments;
+            },
+          },
+        })
+        .result.then(function (val) {
+          if ("undefined" != typeof val && null != val) {
+            scope.ShowItem(val);
+          } else {
+            noticeboardPostSurveyService();
+          }
+        });
+    };
+    scope.checkForLongLinkText = function (stackScraper) {
+      return filter("checkForLongLinkText")(stackScraper);
+    };
+    scope.checkForLongLinkTextV2 = function (example, next, status) {
+      return filter("checkForLongLinkTextV2")(example, next, status);
+    };
+    scope.showPicture = function (scaleX) {
+      modal
+        .open({
+          templateUrl: "Wizdom365/Templates/Dialogs/Image.html",
+          controller: "Wizdom365ShowImageController",
+          windowClass: "bootstrap-wrapper",
+          size: "lg",
+          resolve: {
+            imgUrl: function () {
+              return scaleX;
+            },
+          },
+        })
+        .result.then();
+    };
+  }
+
+  angular
+    .module("Wizdom365.Noticeboard")
+    .directive("dbNoticeboard", dbNoticeboardDirective);
+  dbNoticeboardDirective.$inject = ["$window", "log", "$filter"];
+  dbNoticeboardController.$inject = [
+    "$rootScope",
+    "$scope",
+    "$element",
+    "$attrs",
+    "webpartPropertiesService",
+    "contextInfo",
+    "noticeboardApi",
+    "localStorageService",
+    "$interval",
+    "$window",
+    "configuration",
+    "$modal",
+    "log",
+    "socialNotificationService",
+    "responsive",
+    "$q",
+    "$filter",
+  ];
+})();
+
+(function () {
+  function dbLocalNewCreateEditController(
+    filter,
+    scope,
+    noticeboardApi,
+    configuration,
+    notificationService,
+    webApiProxy,
+    log,
+    videoUtility
+  ) {
+    function s() {
+      (scope.isVideoEnabled = 2 == scope.selectedcontenttype.id),
+        null != scope.editItem
+          ? ((scope.startDate = new Date(scope.editItem.startDate)),
+            (scope.endDate = new Date(scope.editItem.endDate)),
+            (scope.newsTitle = scope.editItem.heading),
+            (scope.newsContent = scope.editItem.content),
+            null != scope.editItem.alternateAuthor &&
+            (scope.altAuthor = scope.editItem.alternateAuthor),
+            null != scope.editItem.metadata &&
+            ((scope.metadata = scope.editItem.metadata),
+              null != scope.editItem.metadata.allowComments &&
+              (scope.allowComments = scope.editItem.metadata.allowComments),
+              scope.isVideoEnabled
+                ? (null != scope.editItem.metadata.videoImage &&
+                  scope.editItem.metadata.videoImage.length > 0 &&
+                  (scope.videoImage = scope.editItem.metadata.videoImage),
+                  null != scope.editItem.metadata.link &&
+                  scope.editItem.metadata.link.length > 0 &&
+                  (scope.videoLink = scope.editItem.metadata.link))
+                : scope.selectedcontenttype.metaData.useRollupImage &&
+                scope.editItem.metadata.picture &&
+                (scope.newsImage = scope.editItem.metadata.picture)))
+          : ((scope.endDate1 = filter("date")(new Date(), "dd-mm-yyyy")),
+            (scope.startDate = new Date()),
+            (scope.endDate = new Date(scope.startDate)),
+            (scope.endDate = new Date(
+              scope.endDate.setFullYear(scope.endDate.getFullYear() + 100)
+            ))),
+        scope.isVideoEnabled
+          ? null == scope.videoImage &&
+          scope.selectedcontenttype.metaData.useRollupImage &&
+          (scope.videoImage = scope.selectedcontenttype.metaData.rollupImage)
+          : null == scope.newsImage &&
+          scope.selectedcontenttype.metaData.useRollupImage &&
+          (scope.newsImage = scope.selectedcontenttype.metaData.rollupImage);
+    }
+    function c() {
+      var i = scope.selectedchannels.map(function (e) {
+        return {
+          id: e,
+        };
+      }),
+        l = {
+          id: null != scope.editItem ? scope.editItem.id : 0,
+          author: null != scope.editItem ? scope.editItem.author : null,
+          heading: scope.newsTitle,
+          content: scope.newsContent,
+          startDate: scope.startDate,
+          endDate: scope.endDate,
+          alternateAuthor:
+            null != scope.altAuthor
+              ? {
+                loginName: scope.altAuthor.loginName,
+                displayName: scope.altAuthor.displayName,
+                id: scope.altAuthor.id,
+              }
+              : null,
+          metadata: scope.metadata,
+          contentType: scope.selectedcontenttype,
+          channels: i,
+        };
+      scope.isVideoEnabled
+        ? (l.metadata = _.merge(l.metadata, {
+          link: scope.videoLink,
+          videoImage: scope.videoImage,
+          allowComments: scope.allowComments,
+        }))
+        : (l.metadata = _.merge(l.metadata, {
+          picture: scope.newsImage,
+          allowComments: scope.allowComments,
+        })),
+        noticeboardApi.items
+          .createNews(l)
+          .then(function (n) {
+            if (null != n && 0 != n) {
+              var i =
+                scope.newsContent &&
+                scope.newsContent.indexOf("atwho-inserted") > 0;
+              if (i)
+                try {
+                  var s = $(scope.newsContent).find(".atwho-inserted"),
+                    c = _.map(s, function (e) {
+                      return {
+                        receiver: {
+                          loginName: $(e).attr("loginname"),
+                        },
+                        targetId: n,
+                        targetType: 1,
+                      };
+                    });
+                  console.log("mentions", c),
+                    c && c.length && webApiProxy.social.addMentio(c);
+                } catch (u) {
+                  log("An error occurred while adding mentions", u);
+                }
+              else if (0 != scope.notifyPrincipals.length) {
+                var m = [];
+                (l.id = n),
+                  _.forEach(scope.notifyPrincipals, function (e) {
+                    if (-1 != scope.newsContent.indexOf(d(e.displayName))) {
+                      var n = {
+                        receiver: e,
+                        targetID: l.id,
+                        targetType: 1,
+                      };
+                      m.push(n);
+                    }
+                  }),
+                  m.length > 0 && webApiProxy.social.addMentio(m);
+              }
+              scope.$emit("closeDialog");
+            } else {
+              var g = filter("translate")(
+                "Some error occurred while item saving."
+              );
+              notificationService.showErrorMessage(g), (p = !1);
+            }
+          })
+        ["catch"](function () {
+          p = !1;
+        });
+    }
+    function d(e) {
+      return "@" + e.replace(/ /g, "");
+    }
+    function u(e) {
+      return null == e.newsTitle || 0 == e.newsTitle.length
+        ? "Please add a title."
+        : null == e.metadata.subHeader
+          ? "Please add a lead."
+          : null == e.startDate
+            ? "Please fill in a start date."
+            : null == e.endDate
+              ? "Please fill in an end date."
+              : e.startDate > e.endDate
+                ? "The start date must be before the end date."
+                : new Date() > e.endDate
+                  ? "The end date must be later than the the current time."
+                  : e.isVideoEnabled &&
+                    (null == e.isVideoEnabled ||
+                      null == e.videoLink ||
+                      0 == e.videoLink.length ||
+                      e.invalidUrl)
+                    ? "Please enter a valid video link."
+                    : null;
+    }
+    (scope.isVideoEnabled = scope.isVideoEnabled || !1),
+      (scope.newsTitle = null),
+      (scope.newsContent = null),
+      (scope.startDate = null),
+      (scope.endDate = null),
+      (scope.altAuthor = null),
+      (scope.videoLink = ""),
+      (scope.videoImage = null),
+      (scope.newsImage = null),
+      (scope.allowComments = configuration.Noticeboard
+        ? $.parseJSON(
+          configuration.Noticeboard.SocialFeature.EnableSocialOnItemByDefault
+        )
+        : !0),
+      (scope.invalidUrl = !1),
+      (scope.socialFeatureEnabled = configuration.Noticeboard
+        ? $.parseJSON(configuration.Noticeboard.SocialFeature.Enabled)
+        : !1),
+      (scope.searchPrincipals = []),
+      (scope.notifyPrincipals = []),
+      (scope.metadata = {}),
+      (scope.tinyMceOptions = {
+        init_instance_callback: function (e) {
+          (scope.iframeElement = e.iframeElement),
+            e.on("SetAttrib", function (t) {
+              "style" == t.attrName &&
+                setTimeout(function () {
+                  e.execCommand("mceRepaint");
+                });
+            }),
+            $(".ie11focusfix").focus(),
+            e.serializer.addNodeFilter("script,style", function (e, t) {
+              function n(e) {
+                return e
+                  .replace(/(<!--\[CDATA\[|\]\]-->)/g, "\n")
+                  .replace(/^[\r\n]*|[\r\n]*$/g, "")
+                  .replace(
+                    /^\s*((<!--)?(\s*\/\/)?\s*<!\[CDATA\[|(<!--\s*)?\/\*\s*<!\[CDATA\[\s*\*\/|(\/\/)?\s*<!--|\/\*\s*<!--\s*\*\/)\s*[\r\n]*/gi,
+                    ""
+                  )
+                  .replace(
+                    /\s*(\/\*\s*\]\]>\s*\*\/(-->)?|\s*\/\/\s*\]\]>(-->)?|\/\/\s*(-->)?|\]\]>|\/\*\s*-->\s*\*\/|\s*-->\s*)\s*$/g,
+                    ""
+                  );
+              }
+              for (var i, o, r = e.length; r--;)
+                (i = e[r]),
+                  (o = i.firstChild ? i.firstChild.value : ""),
+                  o.length > 0 && (i.firstChild.value = n(o));
+            });
+        },
+        entity_encoding: "raw",
+        selector: "textarea",
+        invalid_elements: "script, iframe",
+        cleanup: !1,
+      }),
+      (scope.options = {
+        "show-weeks": !1,
+        formatYear: "yy",
+        startingDay: 1,
+      }),
+      (scope.opened = !1),
+      (scope.open = function (e) {
+        e.preventDefault(), e.stopPropagation(), (scope.opened = !0);
+      }),
+      (scope.disabled = function (e, n) {
+        return 1 == scope.disableWeekends
+          ? "day" === n && (0 === e.getDay() || 6 === e.getDay())
+          : !1;
+      }),
+      (scope.removeAltAuthor = function () {
+        scope.altAuthor = null;
+      }),
+      (scope.deleteVideoImage = function () {
+        scope.videoImage = null;
+      }),
+      (scope.checkUrl = function () {
+        return "undefined" == typeof scope.videoLink ||
+          null == scope.videoLink ||
+          0 === scope.videoLink.length
+          ? void (scope.invalidUrl = !1)
+          : void (scope.invalidUrl =
+            "unknown" === videoUtility.getVideoType(scope.videoLink));
+      }),
+      (scope.addAltAuthor = function (e, n, i) {
+        (scope.asyncSelected = ""), (scope.altAuthor = n);
+      }),
+      (scope.searchForPrincipal = function (e) {
+        return !e || e.length < 2
+          ? []
+          : noticeboardApi.principals
+            .searchForPrincipalAuthors(e)
+            .then(function (e) {
+              return e;
+            });
+      }),
+      (scope.deleteImage = function () {
+        scope.newsImage = null;
+      });
+    var p = !1;
+    scope.$watch("mode", function (e, t) {
+      "secondScene" == e && s();
+    }),
+      scope.$on("saveNews", function (n) {
+        if (!p) {
+          var newEndDate = new Date(scope.startDate);
+          scope.endDate = new Date(
+            newEndDate.setFullYear(newEndDate.getFullYear() + 100)
+          );
+
+          var i = u(scope);
+          i
+            ? notificationService.showErrorMessage(filter("translate")(i))
+            : ((p = !0), c());
+        }
+      }),
+      (scope.selectUser = function (e) {
+        return (
+          _.contains(scope.notifyPrincipals, e) ||
+          scope.notifyPrincipals.push(e),
+          d(e.displayName)
+        );
+      }),
+      (scope.searchForMention = function (e) {
+        return !e || e.length < 2
+          ? void (scope.searchPrincipals = [])
+          : noticeboardApi.principals
+            .searchForPrincipalAuthors(e)
+            .then(function (e) {
+              scope.searchPrincipals = e;
+            });
+      });
+  }
+  angular
+    .module("Wizdom365.Noticeboard")
+    .controller(
+      "DanskeLocalNewCreateEditController",
+      dbLocalNewCreateEditController
+    ),
+    (dbLocalNewCreateEditController.$inject = [
+      "$filter",
+      "$scope",
+      "noticeboardApi",
+      "configuration",
+      "notificationService",
+      "webApiProxy",
+      "log",
+      "videoUtility",
+    ]);
+})();
+
+(function () {
+  function dbNoticeboardCreateItemController(
+    filter,
+    scope,
+    noticeboardApi,
+    webpartId,
+    itemId,
+    template,
+    modalInstance,
+    notificationService
+  ) {
+    function init() {
+      noticeboardApi.views
+        .getAllAvailableChannelsWithContentTypes(webpartId)
+        .then(function (r) {
+          scope.channelscache = r.channels;
+          var i;
+          i = 0;
+          for (; i < r.contenttypes.length; i++) {
+            if (
+              r.contenttypes[i].id <= 4 &&
+              (null == r.contenttypes[i].metaData.isVisible ||
+                1 == r.contenttypes[i].metaData.isVisible)
+            ) {
+              scope.contenttypescache.push(r.contenttypes[i]);
+            }
+          }
+          if (null != itemId) {
+            suggestHistory();
+            scope.mode = "firstScene";
+          } else {
+            if (
+              1 != scope.contenttypescache.length ||
+              1 != scope.channelscache.length ||
+              (scope.channelscache[0].childs &&
+                0 != scope.channelscache[0].childs.length)
+            ) {
+              if (
+                0 != scope.contenttypescache.length &&
+                0 != scope.channelscache.length
+              ) {
+                resolve(scope.contenttypescache[0]);
+                scope.mode = "firstScene";
+                scope.showHideChannels();
+                resizeOutput(scope.channelsTree, true, true);
+              } else {
+                scope.mode = "nodata";
+              }
+            } else {
+              resolve(scope.contenttypescache[0]);
+              scope.selectItem(scope.channelscache[0]);
+              scope.showHideChannels();
+              scope.next();
+            }
+          }
+        });
+    }
+
+    function setChannelStatusCounts(channelsTree) {
+      var allChildrenCount = 0;
+      var disabledChannelsCount = 0;
+      var selectedChannelsCount = 0;
+
+      _.forEach(channelsTree, function (channel) {
+        channel.allChildrenCount = 0;
+        channel.disabledChannelsCount = 0;
+        channel.selectedChannelsCount = 0;
+
+        if (channel.childs && channel.childs.length > 0) {
+          var channelStatusCounts = setChannelStatusCounts(channel.childs);
+
+          channel.allChildrenCount +=
+            channel.childs.length + channelStatusCounts.allChildrenCount;
+          channel.disabledChannelsCount +=
+            channelStatusCounts.disabledChannelsCount;
+          channel.selectedChannelsCount +=
+            channelStatusCounts.selectedChannelsCount;
+
+          allChildrenCount += channel.allChildrenCount;
+          disabledChannelsCount += channel.disabledChannelsCount;
+          selectedChannelsCount += channel.selectedChannelsCount;
+        }
+
+        if (channel.enabled && scope.selectedchannels.includes(channel.id)) {
+          selectedChannelsCount += 1;
+        }
+
+        if (!channel.enabled) {
+          disabledChannelsCount += 1;
+        }
+      });
+
+      return { selectedChannelsCount, allChildrenCount, disabledChannelsCount };
+    }
+
+    scope.mode = "loading";
+    scope.webpartId = webpartId;
+    scope.editItem = null;
+    scope.channelsTree = [];
+    scope.channelscache = [];
+    scope.contenttypescache = [];
+    scope.selectedchannels = [];
+    scope.selectedcontenttype;
+    scope.templateUrl = null;
+    scope.showAllChannels = false;
+    scope.showAllChannelsText = filter("translate")("Show all");
+    scope.channelOverview = "";
+    scope.isActiveContentType = function (otherKlassDef) {
+      return (
+        !!scope.selectedcontenttype &&
+        scope.selectedcontenttype.name == otherKlassDef.name
+      );
+    };
+    var suggestHistory = function link() {
+      noticeboardApi.views.getItem(webpartId, itemId).then(function (results) {
+        scope.editItem = results.newsItem;
+        if (scope.editItem.startDate.indexOf("Z") < 0) {
+          scope.editItem.startDate = scope.editItem.startDate + "Z";
+        }
+        if (scope.editItem.endDate.indexOf("Z") < 0) {
+          scope.editItem.endDate = scope.editItem.endDate + "Z";
+        }
+        scope.editItem.startDate = new Date(scope.editItem.startDate);
+        scope.editItem.endDate = new Date(scope.editItem.endDate);
+        var result = _.find(scope.contenttypescache, function (objectToFind) {
+          return objectToFind.id == scope.editItem.contentType.id;
+        });
+        if (!result) {
+          result = scope.editItem.contentType;
+          scope.contenttypescache.push(result);
+        }
+        resolve(result);
+        _.forEach(scope.editItem.channels, function (relationItem) {
+          scope.selectedchannels.push(relationItem.id);
+        });
+        scope.showHideChannels();
+        resizeOutput(scope.channelsTree, true, true);
+      });
+    };
+    var getSettings = function end(self, props) {
+      return self.isExternal
+        ? false
+        : self.canContainItems &&
+          self.writeAccessForCurrentUser &&
+          (scope.showAllChannels ||
+            self.isMandatoryForCurrentUser ||
+            self.isPersonalSelectedForCurrentUser ||
+            self.isSuggestedForCurrentUser)
+          ? self.contentTypes.some(function (job) {
+            return job.id === props.id;
+          })
+          : false;
+    };
+    var loadPermission = function init(array, html) {
+      if (0 != array.length) {
+        _.forEach(array, function (self) {
+          var p = {
+            name: self.name,
+            id: self.id,
+            enabled: getSettings(self, scope.selectedcontenttype),
+            childs: [],
+            childrenVisible: false,
+            folderClass: "ms-Icon ms-Icon--ChevronRightMed",
+            expandAll: false,
+          };
+          if (p.enabled || 0 != self.childs.length) {
+            init(self.childs, p.childs);
+            if (p.enabled || p.childs.length > 0) {
+              html.push(p);
+            }
+            if (!p.enabled) {
+              scope.toggleChildren(p);
+            }
+            if (0 == p.childs.length) {
+              p.folderClass = null;
+            }
+          }
+        });
+      }
+    };
+    var resolve = function selectRole(value) {
+      scope.selectedcontenttype = value;
+      scope.channelsTree = [];
+      loadPermission(scope.channelscache, scope.channelsTree);
+    };
+    scope.changeSelectedContentType = function (data) {
+      if (data != scope.selectedcontenttype) {
+        scope.selectedchannels = [];
+        resolve(data);
+      }
+    };
+    scope.next = function () {
+      switch (scope.selectedcontenttype.name.toLowerCase()) {
+        case "news":
+          scope.templateUrl =
+            template.news ||
+            "Noticeboard/Templates/ViewTemplates/Webpart/NewEditForm/CreateAndEdit.html";
+          break;
+        case "video":
+          scope.templateUrl =
+            template.video ||
+            "Noticeboard/Templates/ViewTemplates/Webpart/NewEditForm/CreateAndEdit.html";
+          break;
+        default:
+          scope.templateUrl =
+            template.news ||
+            "Noticeboard/Templates/ViewTemplates/Webpart/NewEditForm/CreateAndEdit.html";
+      }
+      scope.mode = "secondScene";
+    };
+    scope.back = function () {
+      scope.mode = "firstScene";
+    };
+    scope.save = function () {
+      scope.$broadcast("saveNews");
+    };
+    scope.cancel = function () {
+      notificationService.showConfirmationDialog({
+        text:
+          filter("translate")("Are you sure you want to discard your changes") +
+          "?",
+        type: "confirmation",
+        layout: "center",
+        successCalback: function ok() {
+          modalInstance.close();
+        },
+        errorCalback: function callback() { },
+      });
+    };
+    scope.deleteNewsItem = function (order_id) {
+      notificationService.showConfirmationDialog({
+        text:
+          filter("translate")("Are you sure you want to delete this item") +
+          "?",
+        type: "confirmation",
+        layout: "center",
+        successCalback: function clickHandler() {
+          noticeboardApi.items.deleteItem(order_id).then(function () {
+            modalInstance.close();
+          });
+        },
+        errorCalback: function errorCalback() { },
+      });
+    };
+    scope.showHideChannels = function () {
+      scope.showAllChannels = !scope.showAllChannels;
+      scope.showAllChannelsText = scope.showAllChannels
+        ? filter("translate")("Show suggested")
+        : filter("translate")("Show all");
+      resolve(scope.selectedcontenttype);
+      resizeOutput(scope.channelsTree, true, false);
+    };
+    scope.toggleChildren = function (element) {
+      test(element, !element.childrenVisible);
+    };
+    scope.selectItem = function (item) {
+      if (!item.enabled && item.childs.length > 0) {
+        test(item, !item.childrenVisible);
+      } else {
+        var existingProxyIndex = scope.selectedchannels.indexOf(item.id);
+        if (existingProxyIndex > -1) {
+          scope.selectedchannels.splice(existingProxyIndex, 1);
+        } else {
+          scope.selectedchannels.push(item.id);
+        }
+      }
+
+      setChannelStatusCounts(scope.channelsTree);
+    };
+
+    var test = function userToGroup(group, result) {
+      if (null != group.folderClass) {
+        group.childrenVisible = result;
+        group.folderClass = result
+          ? "ms-Icon ms-Icon--ChevronDown"
+          : "ms-Icon ms-Icon--ChevronRightMed";
+      }
+    };
+
+    scope.selectParentChannel = function (channel, expandAll, isFirstStep) {
+      var index = scope.selectedchannels.indexOf(channel.id);
+
+      if (null == expandAll) {
+        expandAll = !channel.expandAll;
+      }
+
+      channel.expandAll = expandAll;
+
+      if (index > -1) {
+        scope.selectedchannels.splice(index, 1);
+      }
+
+      if (expandAll && channel.enabled) {
+        scope.selectedchannels.push(channel.id);
+      }
+
+      test(channel, true);
+      _.forEach(channel.childs, function (child) {
+        scope.selectParentChannel(child, expandAll, false);
+      });
+
+      if (isFirstStep) {
+        setChannelStatusCounts(scope.channelsTree);
+      }
+    };
+
+    var resizeOutput = function getPaths(routes, options, updateCounts) {
+      _.forEach(routes, function (data) {
+        test(data, options);
+        getPaths(data.childs, options, false);
+      });
+
+      if (updateCounts) {
+        setChannelStatusCounts(scope.channelsTree);
+      }
+    };
+
+    scope.$on("closeDialog", function (canCreateDiscussions) {
+      modalInstance.close();
+    });
+
+    init();
+  }
+  angular
+    .module("Wizdom365.Noticeboard")
+    .controller(
+      "DanskeNoticeboardCreateItemController",
+      dbNoticeboardCreateItemController
+    ),
+    (dbNoticeboardCreateItemController.$inject = [
+      "$filter",
+      "$scope",
+      "noticeboardApi",
+      "webpartId",
+      "itemId",
+      "template",
+      "$modalInstance",
+      "notificationService",
+    ]);
+})();
+
+(function () {
+  function dbNoticeboardChooseChannelsController(
+    filter,
+    scope,
+    modalInstance,
+    timeout,
+    noticeboardApi,
+    valueService,
+    viewId
+  ) {
+    function save() {
+      var selectedChannels = _.map(scope.selectedchannels, function (channel) {
+        return channel.id;
+      });
+      noticeboardApi.views
+        .updateMyChannelSelection(scope.viewId, selectedChannels)
+        .then(function () {
+          modalInstance.close(selectedChannels);
+        });
+    }
+
+    function cancel() {
+      modalInstance.dismiss("cancel");
+    }
+
+    function init() {
+      noticeboardApi.views
+        .getMyChannelsSelection(scope.viewId)
+        .then(function (availableChannels) {
+          if (
+            ((scope.loading = false),
+              (scope.availableChannels = availableChannels),
+              scope.availableChannels.length > 0)
+          ) {
+            var channelsCount = execute(
+              scope.availableChannels,
+              scope.channelsTree
+            );
+
+            setChannelStatusCounts(scope.channelsTree);
+
+            if (channelsCount <= valueService.noticboard.channelMax) {
+              callback(scope.channelsTree, true);
+            }
+          }
+        });
+    }
+
+    function execute(channels, channelsTree) {
+      var channelsCount = 0;
+
+      return (
+        _.forEach(
+          _.filter(channels, function (channel) {
+            return channel.canContainItems || channel.childs.length > 0;
+          }),
+          function (channel) {
+            var options = {
+              name: channel.name,
+              id: channel.id,
+              enabled: channel.canContainItems,
+              visible: false,
+              childs: [],
+              childrenVisible: false,
+              folderClass: "ms-Icon ms-Icon--ChevronRightMed",
+              expandAll: false,
+              item: channel,
+            };
+
+            channelsCount =
+              channelsCount + (1 + execute(channel.childs, options.childs));
+            options.visible = options.enabled || options.childs.length > 0;
+            options.folderClass =
+              options.childs.length > 0 ? options.folderClass : null;
+
+            if (
+              channel.isMandatoryForCurrentUser ||
+              channel.isSuggestedForCurrentUser ||
+              channel.isPersonalSelectedForCurrentUser
+            ) {
+              scope.selectedchannels.push(channel);
+            }
+
+            if (options.visible) {
+              channelsTree.push(options);
+            }
+
+            if (!options.enabled) {
+              scope.toggleChildren(options);
+            }
+          }
+        ),
+        channelsCount
+      );
+    }
+
+    function toggleChildren(options) {
+      toggleChannelVisibility(options, !options.childrenVisible);
+    }
+
+    function toggleChannelVisibility(options, childrenVisible) {
+      if (null != options.folderClass) {
+        options.childrenVisible = childrenVisible;
+        options.folderClass = childrenVisible
+          ? "ms-Icon ms-Icon--ChevronDown"
+          : "ms-Icon ms-Icon--ChevronRightMed";
+      }
+    }
+
+    function selectParentChannel(channel, expandAll, isFirstStep) {
+      if (null == expandAll) {
+        expandAll = !channel.expandAll;
+      }
+
+      channel.expandAll = expandAll;
+
+      if (
+        channel.enabled &&
+        !channel.item.isMandatoryForCurrentUser &&
+        (channel.item.isPersonalSelectedForCurrentUser != expandAll ||
+          channel.item.isSuggestedForCurrentUser != false)
+      ) {
+        channel.item.isPersonalSelectedForCurrentUser = expandAll;
+        channel.item.isSuggestedForCurrentUser = false;
+        scope.updateSelectedChannel(channel);
+      }
+
+      toggleChannelVisibility(channel, true);
+      _.forEach(channel.childs, function (child) {
+        scope.selectParentChannel(child, expandAll, false);
+      });
+
+      if (isFirstStep) {
+        setChannelStatusCounts(scope.channelsTree);
+      }
+    }
+
+    function selectChannel(channel) {
+      if (!channel.enabled && channel.childs.length > 0) {
+        toggleChannelVisibility(channel, !channel.childrenVisible);
+      } else {
+        if (channel.enabled && !channel.item.isMandatoryForCurrentUser) {
+          channel.item.isPersonalSelectedForCurrentUser = !channel.item
+            .isPersonalSelectedForCurrentUser;
+          scope.updateSelectedChannel(channel);
+        }
+      }
+
+      setChannelStatusCounts(scope.channelsTree);
+    }
+
+    function callback(channelsTree, childrenVisible) {
+      _.forEach(channelsTree, function (channel) {
+        toggleChannelVisibility(channel, childrenVisible);
+        callback(channel.childs, childrenVisible);
+      });
+    }
+
+    function updateSelectedChannel(channel) {
+      if (
+        channel.item.isPersonalSelectedForCurrentUser &&
+        channel.item.isSuggestedForCurrentUser
+      ) {
+        channel.item.isSuggestedForCurrentUser = channel.item.isPersonalSelectedForCurrentUser = false;
+      }
+
+      if (channel.item.isPersonalSelectedForCurrentUser) {
+        scope.selectedchannels.push(channel.item);
+      } else {
+        _.remove(scope.selectedchannels, function (selectedChannel) {
+          return selectedChannel.id == channel.item.id;
+        });
+      }
+    }
+
+    function setChannelStatusCounts(channelsTree) {
+      var allChildrenCount = 0;
+      var disabledChannelsCount = 0;
+      var selectedChannelsCount = 0;
+
+      _.forEach(channelsTree, function (channel) {
+        channel.allChildrenCount = 0;
+        channel.disabledChannelsCount = 0;
+        channel.selectedChannelsCount = 0;
+
+        if (channel.childs && channel.childs.length > 0) {
+          var channelStatusCounts = setChannelStatusCounts(channel.childs);
+
+          channel.allChildrenCount +=
+            channel.childs.length + channelStatusCounts.allChildrenCount;
+          channel.disabledChannelsCount +=
+            channelStatusCounts.disabledChannelsCount;
+          channel.selectedChannelsCount +=
+            channelStatusCounts.selectedChannelsCount;
+
+          allChildrenCount += channel.allChildrenCount;
+          disabledChannelsCount += channel.disabledChannelsCount;
+          selectedChannelsCount += channel.selectedChannelsCount;
+        }
+
+        if (
+          channel.enabled &&
+          (channel.item.isMandatoryForCurrentUser ||
+            channel.item.isSuggestedForCurrentUser ||
+            channel.item.isPersonalSelectedForCurrentUser)
+        ) {
+          selectedChannelsCount += 1;
+        }
+
+        if (!channel.enabled) {
+          disabledChannelsCount += 1;
+        }
+      });
+
+      return { selectedChannelsCount, allChildrenCount, disabledChannelsCount };
+    }
+
+    scope.viewId = viewId;
+    scope.loading = true;
+    scope.availableChannels = [];
+    scope.channelsTree = [];
+    scope.selectedchannels = [];
+    scope.save = save;
+    scope.cancel = cancel;
+    scope.initialize = init;
+    scope.toggleChildren = toggleChildren;
+    scope.selectParentChannel = selectParentChannel;
+    scope.selectChannel = selectChannel;
+    scope.updateSelectedChannel = updateSelectedChannel;
+    init();
+  }
+  angular
+    .module("Wizdom365.Noticeboard")
+    .controller(
+      "DanskeNoticeboardChooseChannelsController",
+      dbNoticeboardChooseChannelsController
+    ),
+    (dbNoticeboardChooseChannelsController.$inject = [
+      "$filter",
+      "$scope",
+      "$modalInstance",
+      "$timeout",
+      "noticeboardApi",
+      "valueService",
+      "viewId",
+    ]);
+})();
+(function () {
+  function dbNoticeboardArchiveDirective() {
+    function link(text, args, ngTable) {}
+    return {
+      scope: {},
+      template:
+        '<div class="bootstrap-wrapper">\n                         <div class="noticeboard-archive">\n                          <a id="{{::webpartId}}" style="position: relative; top: -150px;"></a>  \n                          <div class="editmode-button" ng-if="::editMode">\n                                    <div class="webpart-edit-button-container">\n                                        <button class="editWebpartButton btn" ng-click="editWebpart()" type="button" title="{{\'Edit Webpart\' | translate}}">\n                                            <span class="ms-Icon ms-Icon--Edit"></span><span class="editWebpartButtonText">{{\'Edit\' | translate}}</span>\n                                        </button>\n                                    </div>\n                          </div>\n                          <div ng-if="needToConfigureWebpart">{{\'Please configure the web part\' | translate}}</div>\n                          <div wizdom-include="::view.extendedProperties.overviewTemplate"></div>\n                          <div wizdom365-spinner="" loading="loading"></div>\n                         </div>\n                        </div>',
+      link: link,
+      controller: dbNoticeboardArchiveController,
+    };
+  }
+  function dbNoticeboardArchiveController(
+    rootScope,
+    scope,
+    element,
+    attrs,
+    webpartPropertiesService,
+    contextInfo,
+    noticeboardApi,
+    filter,
+    modal,
+    config,
+    socialNotificationService,
+    queryString,
+    query,
+  ) {
+    function persistRecordOffline(fromIndex) {
+      if (null != fromIndex && "number" == typeof fromIndex) {
+        scope.editNewsItem(fromIndex);
+      }
+    }
+
+    function parse(xPath) {
+      try {
+        var message = xPath.replace(/[\/\[\]%*&]/gi, " ");
+        return "" !== message ? message : "empty";
+      } catch (n) {
+        return "empty";
+      }
+    }
+
+    function init() {
+      scope.dataReady = false;
+      noticeboardApi.views.getViewById(scope.webpartId).then(function (n) {
+        scope.view = n;
+
+        if (!scope.view) {
+          scope.needToConfigureWebpart = true;
+        }
+
+        if (scope.view) {
+          scope.scrollTo = document.getElementById(scope.webpartId);
+          scope.numPerPage = scope.view.extendedProperties.itemsPerPage;
+          scope.maxnumPages = scope.view.extendedProperties.maxNumberOfPages;
+          scope.dataReady = true;
+
+          scope.isEvent =
+            scope.view &&
+            scope.view.extendedProperties &&
+            scope.view.extendedProperties.overviewTemplate &&
+            scope.view.extendedProperties.overviewTemplate.toLowerCase().includes("event");
+        }
+
+        if (!document.displayNoticeboardNewsIdOnPageLoad) {
+          if ((document.displayNoticeboardNewsIdOnPageLoad = render("newsId"))) {
+            scope.ShowItem(document.displayNoticeboardNewsIdOnPageLoad);
+          }
+        }
+      });
+
+      noticeboardApi.views
+        .getMyChannelsSelection(scope.viewId)
+        .then(function (channelList) {
+          scope.channelList = channelList;
+
+          if (0 != scope.channelList.length) {
+            var path = window.location.href;
+            var url = new URL(path);
+            var filters = url.searchParams.get("filters");
+
+            if (filters) {
+              var channelNames = filters.split("_").map(function (filter) {
+                return filter.toLowerCase();
+              });
+
+              _.forEach(scope.channelList, function (channel) {
+                setChannelFilter(channel, channelNames);
+              });
+            }
+
+            if (scope.channelFilter.length) {
+              scope.channels = scope.channelFilter;
+            }
+            scope.mode = "loadComplete";
+          } else {
+            scope.mode = "nodata";
+          }
+        })
+        .finally(function () {
+          scope.search();
+        });
+    }
+
+    scope.filterCounter = 0;
+
+    function setChannelFilter(channel, filters, level = 0) {
+      if (channel && channel.childs && channel.childs.length > 0) {
+        _.forEach(channel.childs, function (child) {
+          if (filters.indexOf(child.name.toLowerCase()) > -1) {
+            child.checked = true;
+            scope.channelFilter.push(child);
+            scope.filterCounter++;
+
+            if (((!child.canContainItems && level === 1) || level === 2) && child.childs) {
+              _.forEach(child.childs, function (secondChild) {
+                scope.selectParentChannel(secondChild);
+              });
+              return;
+            }
+          }
+
+          if (level < 1 || (level < 2 && child.canContainItems)) {
+            setChannelFilter(child, filters, level + 1);
+          }
+
+          if (level === 0 && scope.filterCounter > 0) {
+            child.show = true;
+            child.selectedChannelsCount = scope.filterCounter;
+            scope.filterCounter = 0;
+          }
+        });
+      }
+    }
+
+    function render(index) {
+      var href = window.location.href;
+      index = index.replace(/[\[\]]/g, "\\$&");
+      var exp = new RegExp("[?&]" + index + "(=([^&#]*)|&|#|$)");
+      var field = exp.exec(href);
+      return field ? (field[2] ? decodeURIComponent(field[2].replace(/\+/g, " ")) : "") : null;
+    }
+
+    function filterByDate(data) {
+      if (data) {
+        if (scope.dateModified) {
+          scope.startdateFilter = data.startdate;
+          scope.enddateFilter = data.enddate;
+        }
+        if (scope.dateModified || 0 != scope.channelFilter.length) {
+          scope.dateFilter = true;
+        } else {
+          scope.dateFilter = false;
+        }
+        scope.search();
+      }
+    }
+
+    scope.webpartId = webpartPropertiesService.getWebpartId(element);
+    scope.viewId = scope.webpartId;
+    scope.mode = "loading";
+    scope.webpartProperties = attrs.webpartProperties ? JSON.parse(attrs.webpartProperties) : {};
+    webpartPropertiesService.hideEditCode(element);
+    scope.editMode = webpartPropertiesService.isInEditMode(element);
+
+    if (queryString.k) {
+      scope.searchObj = {
+        text: decodeURIComponent(queryString.k),
+      };
+    } else {
+      scope.searchObj = {
+        text: "",
+      };
+    }
+
+    scope.scrollTo = null;
+    scope.dataReady = false;
+    scope.searchReady = false;
+    scope.data = [];
+    scope.searchedAtleastOnce = false;
+    scope.channelFilter = [];
+    scope.personFilter = [];
+    scope.startdateFilter = null;
+    scope.enddateFilter = null;
+    scope.dateFilter = false;
+    scope.dateFilters = {
+      startdate: null,
+      enddate: null,
+    };
+    scope.enddateMinDate = scope.dateFilters.startdate;
+    scope.socialFeatureEnabled = config.Noticeboard ? $.parseJSON(config.Noticeboard.SocialFeature.Enabled) : false;
+    scope.enableSocialOnOldItems = config.Noticeboard
+      ? $.parseJSON(config.Noticeboard.SocialFeature.EnableSocialOnItemByDefault)
+      : false;
+    scope.enableSocialOnItemByDefault = config.Noticeboard
+      ? $.parseJSON(config.Noticeboard.SocialFeature.EnableSocialOnItemByDefault)
+      : false;
+    scope.socialOverviewComments = config.Noticeboard
+      ? $.parseJSON(config.Noticeboard.SocialFeature.OverviewComments)
+      : false;
+    scope.view = null;
+    scope.needToConfigureWebpart = false;
+    scope.loading = false;
+    scope.listenerExist = false;
+    scope.$on("NoticeboardNewsItemRead", function (canCreateDiscussions, searchLyrInfo) {
+      var feedItem = _.find(scope.data, function (opLyrInfo) {
+        return opLyrInfo.id === searchLyrInfo.id;
+      });
+      if (feedItem) {
+        feedItem.isRead = true;
+      }
+    });
+    scope.$on("NoticeboardNewsItemUnread", function (canCreateDiscussions, searchLyrInfo) {
+      var feedItem = _.find(scope.data, function (opLyrInfo) {
+        return opLyrInfo.id === searchLyrInfo.id;
+      });
+      if (feedItem) {
+        feedItem.isRead = false;
+        ``;
+      }
+    });
+    scope.$watch("dateFilters.startdate", function (b, i) {
+      if (!(b && i && b.toString() == i.toString())) {
+        if (b) {
+          scope.enddateMinDate = scope.dateFilters.startdate;
+          if (b && scope.dateFilters.enddate && b.getTime() > scope.dateFilters.enddate.getTime()) {
+            notificationService.showErrorMessage(
+              filter("translate")("The start-date can not be greater than the end-date."),
+            );
+            scope.dateFilters.enddate = scope.enddateMinDate;
+          }
+        } else {
+          scope.enddateMinDate = "0001-01-01";
+        }
+
+        scope.dateModified = true;
+        filterByDate(scope.dateFilters);
+      }
+    });
+    scope.$watch("dateFilters.enddate", function (b, i) {
+      if (!(b && i && b.toString() == i.toString())) {
+        if (b && scope.dateFilters.startdate && b.getTime() < scope.dateFilters.startdate.getTime()) {
+          notificationService.showErrorMessage(
+            filter("translate")("The end-date can not be lesser than the start-date."),
+          );
+          scope.dateFilters.enddate = scope.enddateMinDate;
+        }
+
+        scope.dateModified = true;
+        filterByDate(scope.dateFilters);
+      }
+    });
+    scope.editWebpart = function () {
+      modal
+        .open({
+          templateUrl: "Noticeboard/Templates/Dialogs/EditWebpartArchive.html",
+          controller: "Wizdom365NoticeboardEditWebpartArchiveController",
+          windowClass: "bootstrap-wrapper",
+          resolve: {
+            webpartId: function () {
+              return scope.webpartId;
+            },
+          },
+        })
+        .result.then(function (canCreateDiscussions) {
+          init();
+        });
+    };
+    scope.ShowItem = function (itemId) {
+      modal
+        .open({
+          templateUrl: scope.view.extendedProperties.showItemTemplate,
+          controller: "Wizdom365NoticeboardShowNewsController",
+          windowClass: "bootstrap-wrapper",
+          size: "lg",
+          resolve: {
+            webpartId: function () {
+              return scope.webpartId;
+            },
+            item: function () {
+              var child = _.find(scope.items, {
+                id: itemId,
+              });
+              if (child) {
+                return child;
+              }
+              var dfd = query.defer();
+              return (
+                noticeboardApi.views.getItem(scope.webpartId, itemId).then(function (results) {
+                  dfd.resolve(results.newsItem);
+                }),
+                dfd.promise
+              );
+            },
+            pageableIds: function () {
+              return (
+                scope.totalPageableIds || (scope.totalPageableIds = []),
+                scope.totalPageableIds.length < 1 &&
+                  _.each(scope.unreadComments, function (relationItem) {
+                    scope.totalPageableIds.push(relationItem.id);
+                  }),
+                scope.totalPageableIds
+              );
+            },
+            itemInfo: function () {
+              return {
+                itemId: itemId,
+                shouldNotMarkRead: true,
+              };
+            },
+          },
+        })
+        .result.then(persistRecordOffline, persistRecordOffline);
+    };
+    scope.editNewsItem = function (n) {
+      modal
+        .open({
+          templateUrl: scope.isEvent
+            ? "Noticeboard/Templates/Dialogs/DanskeCreateEvent.html"
+            : "Noticeboard/Templates/Dialogs/DanskeCreateLocalNew.html",
+          controller: "DanskeNoticeboardCreateItemController",
+          windowClass: "bootstrap-wrapper",
+          size: "lg",
+          resolve: {
+            webpartId: function () {
+              return scope.webpartId;
+            },
+            itemId: function () {
+              return n;
+            },
+            template: function () {
+              return {
+                news: scope.view.extendedProperties.createEditNewsTemplate,
+                video: scope.view.extendedProperties.createEditVideoTemplate,
+              };
+            },
+          },
+        })
+        .result.then(function (canCreateDiscussions) {
+          init();
+        });
+    };
+    scope.changeReadStatus = function (self) {
+      var i = !self.isRead;
+      var date = new Date().toJSON();
+      if (i) {
+        noticeboardApi.items.markRead(self.id).then(function () {
+          if (date > self.endDate || date < self.startDate) {
+            scope.$broadcast("NoticeboardNewsItemRead", self);
+          } else {
+            rootScope.$broadcast("NoticeboardNewsItemRead", self);
+          }
+        });
+      } else {
+        noticeboardApi.items.markUnread(self.id).then(function () {
+          if (date > self.endDate || date < self.startDate) {
+            scope.$broadcast("NoticeboardNewsItemUnread", self);
+          } else {
+            rootScope.$broadcast("NoticeboardNewsItemUnread", self);
+          }
+        });
+      }
+    };
+    scope.showFilter = function () {
+      modal
+        .open({
+          templateUrl: "Noticeboard/Templates/Dialogs/ArchiveFilter.html",
+          controller: "Wizdom365NoticeboardArchiveFilterController",
+          windowClass: "bootstrap-wrapper",
+          resolve: {
+            webpartId: function () {
+              return scope.webpartId;
+            },
+            filters: function () {
+              return {
+                channels: scope.channelFilter,
+                authors: scope.personFilter,
+                startdate: scope.startdateFilter,
+                enddate: scope.enddateFilter,
+              };
+            },
+          },
+        })
+        .result.then(function (data) {
+          if (data) {
+            if (data.channels.length > 0 || data.authors.length > 0) {
+              scope.channelFilter = data.channels;
+              scope.personFilter = data.authors;
+            }
+            if (data.dateModified) {
+              scope.startdateFilter = data.startdate;
+              scope.enddateFilter = data.enddate;
+            }
+            if (data.dateModified || 0 != data.channels.length || 0 != data.authors.length) {
+              scope.dateFilter = true;
+            } else {
+              scope.dateFilter = false;
+            }
+            scope.search();
+          }
+        });
+    };
+    scope.removeStartDateFilter = function () {
+      scope.startdateFilter = "";
+      scope.search();
+    };
+    scope.removeEndDateFilter = function () {
+      scope.enddateFilter = "";
+      scope.search();
+    };
+    scope.removePersonFilter = function () {
+      scope.personFilter = [];
+      scope.search();
+    };
+    scope.filterOnPerson = function (bone_in) {
+      scope.personFilter.push(bone_in);
+      scope.search();
+    };
+    scope.removeChannelFilterItem = function (matchRange) {
+      var existingProxyIndex = _.findIndex(scope.channelFilter, matchRange);
+      if (existingProxyIndex > -1) {
+        scope.channelFilter.splice(existingProxyIndex, 1);
+      }
+      scope.search();
+    };
+    scope.filterOnChannel = function (bone_in) {
+      scope.channelFilter.push(bone_in);
+      scope.search();
+    };
+    scope.search = function (rememberPreviousSearch) {
+      if (void 0 === rememberPreviousSearch) {
+        rememberPreviousSearch = false;
+      }
+      scope.loading = true;
+      scope.searchReady = false;
+      scope.totalPages = 0;
+      var data = {
+        searchTerm: parse(scope.searchObj.text),
+        viewId: scope.webpartId,
+        channels: [],
+        fromDate: "",
+        toDate: "",
+        authorId: null,
+        take: scope.numPerPage,
+        skip: null,
+        language: contextInfo.language,
+      };
+      if (scope.channelFilter.length > 0) {
+        var channels = [];
+        var playlistIndex = 0;
+        for (; playlistIndex < scope.channelFilter.length; playlistIndex++) {
+          channels.push(scope.channelFilter[playlistIndex].id);
+        }
+        data.channels = channels;
+      }
+      if (scope.dateFilter) {
+        if (null != scope.startdateFilter && "" != scope.startdateFilter) {
+          data.fromDate = new Date(
+            Date.UTC(
+              scope.startdateFilter.getFullYear(),
+              scope.startdateFilter.getMonth(),
+              scope.startdateFilter.getDate(),
+            ),
+          ).toISOString();
+        }
+        if (null != scope.enddateFilter && "" != scope.enddateFilter) {
+          data.toDate = new Date(
+            Date.UTC(scope.enddateFilter.getFullYear(), scope.enddateFilter.getMonth(), scope.enddateFilter.getDate()),
+          ).toISOString();
+        }
+      }
+      if (scope.personFilter.length > 0) {
+        data.authorId = scope.personFilter[0].principalID;
+      }
+      if (rememberPreviousSearch) {
+        data.skip = (scope.currentPage - 1) * scope.numPerPage;
+      } else {
+        scope.setcurrentPage(0);
+      }
+      noticeboardApi.search.searchNewsByFilter(data).then(function (state) {
+        scope.data = state.searchResult.items;
+        scope.totalPages = state.searchResult.count;
+        scope.totalPageableIds = state.searchResult.pageableIds;
+        scope.searchReady = true;
+        scope.loading = false;
+        scope.searchedAtleastOnce = true;
+      });
+    };
+    scope.currentPage = 0;
+    scope.numPerPage = 2;
+    scope.numPages = function () {
+      if (scope.searchReady) {
+        var value = Math.ceil(scope.totalPages / scope.numPerPage);
+        return (scope.numberOfPages = scope.maxnumPages > value ? value : scope.maxnumPages);
+      }
+      return 0;
+    };
+    scope.getId = function (i) {
+      return i == scope.currentPage ? "PagingSelf" : "PagingLink";
+    };
+    scope.setcurrentPage = function (index) {
+      scope.currentPage = index;
+      if (0 != index) {
+        scope.search(true);
+      }
+
+      if (scope.scrollTo) {
+        scope.scrollTo.scrollIntoView();
+      }
+    };
+    scope.showPicture = function (scaleX) {
+      modal
+        .open({
+          templateUrl: "Wizdom365/Templates/Dialogs/Image.html",
+          controller: "Wizdom365ShowImageController",
+          windowClass: "bootstrap-wrapper",
+          size: "lg",
+          resolve: {
+            imgUrl: function () {
+              return scaleX;
+            },
+          },
+        })
+        .result.then();
+    };
+    scope.selectItem = function (channel) {
+      var existingProxyIndex = _.findIndex(scope.channelFilter, function (account) {
+        return account.id == channel.id;
+      });
+      if (existingProxyIndex > -1) {
+        scope.channelFilter.splice(existingProxyIndex, 1);
+      } else {
+        scope.channelFilter.push(channel);
+      }
+      scope.search();
+    };
+    scope.selectParentChannel = function (channel, isSearchDisabled) {
+      var existingProxyIndex = _.findIndex(scope.channelFilter, function (account) {
+        return account.id == channel.id;
+      });
+      if (existingProxyIndex > -1) {
+        scope.channelFilter.splice(existingProxyIndex, 1);
+      } else {
+        scope.channelFilter.push(channel);
+      }
+      _.forEach(channel.childs, function (child) {
+        scope.selectParentChannel(child, true);
+      });
+      if (!isSearchDisabled) {
+        scope.search();
+      }
+    };
+
+    init();
+  }
+
+  angular.module("Wizdom365.Noticeboard").directive("dbNoticeboardArchive", dbNoticeboardArchiveDirective);
+  dbNoticeboardArchiveDirective.$inject = [];
+  dbNoticeboardArchiveController.$inject = [
+    "$rootScope",
+    "$scope",
+    "$element",
+    "$attrs",
+    "webpartPropertiesService",
+    "contextInfo",
+    "noticeboardApi",
+    "$filter",
+    "$modal",
+    "configuration",
+    "socialNotificationService",
+    "queryString",
+    "$q",
+  ];
+})();
+(function () {
+  function dbNotificationBadge() {
+    return {
+      scope: {},
+      template: `
+        <span
+          class="no-has-unread"
+          style="display: none"
+          ng-init="show = (mentioItemList.value && mentioItemList.value.length > 0) || (unreadComments.value && unreadComments.value.length > 0)"
+          ng-show="show"
+          ng-style="show && { 'display': 'block' }"
+          title="{{\'You have new notifications\' | translate}}"
+        >
+          {{(mentioItemList.value.length + unreadComments.value.length) > 99 ? "99+" : (mentioItemList.value.length + unreadComments.value.length) }}
+        </span>`,
+      controller: dbNotificationBadgeController,
+    };
+  }
+
+  function dbNotificationBadgeController(
+    filter,
+    scope,
+    timeout,
+    modal,
+    interval,
+    config,
+    notificationApi,
+    socialNotificationService,
+    sessionStorageService,
+    q,
+    noticeboardApi,
+    documentService,
+  ) {
+    function watchNotifications() {
+      var e = JSON.parse(sessionStorageService.getItem("Notifications.Panel"));
+      setNotificationData(e);
+      timeout(loadData, 1000);
+      scope.$watch(socialNotificationService.getOpenItem, function (e, n) {
+        e != n && null != e && 0 != e.id && scope.showItem(e.id);
+      });
+      if (b) {
+        interval.cancel(b);
+      }
+      var i = 5;
+      b = interval(function () {
+        i > 0 && loadData(), i--;
+      }, 60000);
+      scope.$on("$destroy", function (e) {
+        interval.cancel(b);
+      });
+    }
+    function loadData() {
+      if (scope.notificationViewId) {
+        scope.mentioMode = scope.unreadCommentsMode = scope.unreadNewsMode = "loading";
+        notificationApi.notifications.getOverview(scope.notificationViewId).then(function (e) {
+          setNotificationData(e);
+          sessionStorageService.setItem("Notifications.Panel", JSON.stringify(e));
+          scope.mentioMode = scope.unreadCommentsMode = scope.unreadNewsMode = "loadComplete";
+        });
+      }
+    }
+    function setNotificationData(e) {
+      if (null != e) {
+        e.unreadNews ? (scope.unreadNewsCount = e.unreadNews.length) : (scope.unreadNewsCount = 0);
+        scope.channelIds = e.channelIds;
+        socialNotificationService.mentioList.set(e.mentions, e.spMentions);
+        socialNotificationService.unreadNews.set(e.unreadNews);
+        if (scope.socialFeatureEnabled) {
+          socialNotificationService.unreadComments.set(e.unreadComments, e.unreadSPComments);
+        }
+      }
+    }
+
+    scope.notificationView;
+    scope.notificationViewId = config.Noticeboard.Notification.ViewID;
+    scope.socialFeatureEnabled = config.Noticeboard ? $.parseJSON(config.Noticeboard.SocialFeature.Enabled) : !1;
+    scope.channelIds = [];
+    scope.mentioItemList = socialNotificationService.mentioList.get();
+    scope.unreadComments = socialNotificationService.unreadComments.get();
+    scope.loadData = loadData;
+    watchNotifications();
+    var b = null;
+  }
+
+  function dbNotificationPanel() {
+    return {
+      scope: {},
+      template: `
+        <div class="db-notificationPanel" ng-show="uiReady == \'loadComplete\'">
+          <div class="spinner" ng-if="mentioMode !== 'loadComplete' && unreadCommentsMode !== 'loadComplete'"></div>
+          <div
+            ng-if="mentioMode == 'loadComplete' && unreadCommentsMode == 'loadComplete' && mentioItemList.value.length == 0  && unreadComments.value.length == 0">
+            <div>{{'You do not have any new notifications' | translate}}</div>
+          </div>
+          <div class="no-items-container no-mentions" ng-controller="Wizdom365NotificationPanelMentionsController">
+            <div ng-show="mentioMode == 'loadComplete' && mentioItemList.length > 0">
+              <div class="no-item word-break" ng-repeat="item in mentioItemList">
+                <span class="pull-right">
+                  <i ng-if="item.url === null" class="ms-Icon ms-Icon--ChromeClose ms-Icon--xxs ms-Icon--posTop no-link"
+                    ng-click="dismiss(item.targetId);" title="{{'Dismiss' | translate}}" aria-hidden="true"></i>
+                  <i ng-if="item.url !== null" class="ms-Icon ms-Icon--ChromeClose ms-Icon--xxs ms-Icon--posTop no-link"
+                    ng-click="spdismiss(item.targetId);" title="{{'Dismiss' | translate}}" aria-hidden="true"></i>
+                </span>
+                <div class="no-presence-picture">
+                  <div style="display:inline-block" class="presence" db-presence-picture="" size="AVATAR"
+                    accountname="item.mentions[0].sender.loginName" name="item.mentions[0].sender.displayName"></div>
+                </div>
+                <div class="no-spacerForIcon no-presence-picture-spacing">
+                  <span class="no-authorName">{{item.mentions[0].sender.displayName}}</span>
+                  <span ng-if="item.mentions.length === 1" class="no-prepareText">has</span>
+                  <span ng-if="item.mentions.length > 1" class="no-prepareText">and</span>
+                  <span ng-if="item.mentions.length === 2" class="no-authorName">{{item.mentions[1].sender.displayName}}</span>
+                  <span ng-if="item.mentions.length > 2" class="no-authorName">{{item.mentions.length - 1}} others</span>
+                  <span class="no-prepareText">mentioned you on</span>
+                  <span ng-if="item.url === null" class="no-heading no-link" ng-click="openItem(item.targetId)"
+                    title="{{item.heading}}">
+                    {{item.heading}}
+                  </span>
+                  <span ng-if="item.url !== null" class="no-heading no-link no-pageTitle" title="{{item.heading}}">
+                    <a href="{{item.url}}">{{item.heading}}</a>
+                  </span>
+                  <div class="text-muted" am-time-ago="(item.mentions[0].timestamp | wizdom365FormatDate)"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="no-items-container no-unread-comments" ng-controller="wizdom365NotificationPanelUnreadCommentsController">
+            <div ng-show="unreadCommentsMode == 'loadComplete' && unreadComments.length > 0">
+              <div class="no-item word-break" ng-repeat="item in unreadComments">
+                <span class="pull-right">
+                  <i ng-if="item.url === null" class="ms-Icon ms-Icon--ChromeClose ms-Icon--xxs ms-Icon--posTop no-link"
+                    ng-click="dismiss(item);" title="{{'Dismiss' | translate}}" aria-hidden="true"></i>
+                  <i ng-if="item.url !== null" class="ms-Icon ms-Icon--ChromeClose ms-Icon--xxs ms-Icon--posTop no-link"
+                    ng-click="spdismiss(item);" title="{{'Dismiss' | translate}}" aria-hidden="true"></i>
+                </span>
+                <div class="no-spacerForIcon">
+                  <span class="no-authorName">{{item.comments[0].author.displayName}}</span>
+                  <span ng-if="item.comments.length > 1" class="no-prepareText">and</span>
+                  <span ng-if="item.comments.length === 2" class="no-authorName">{{item.comments[1].author.displayName}}</span>
+                  <span ng-if="item.comments.length > 2" class="no-authorName">{{item.comments.length - 1}} others</span>
+                  <span class="no-prepareText">commented on</span>
+                  <span ng-if="item.url === null" class="no-heading no-link" ng-click="openItem(item)" title="{{item.heading}}">
+                    {{item.heading}}
+                  </span>
+                  <span ng-if="item.url !== null" class="no-heading no-link no-pageTitle" title="{{item.heading}}">
+                    <a href="{{item.url}}">{{item.heading}}</a>
+                  </span>
+                  <div class="text-muted" am-time-ago="(item.comments[0].datePosted | wizdom365FormatDate)"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>`,
+      controller: dbNotificationPanelController,
+    };
+  }
+
+  function dbNotificationPanelController(
+    filter,
+    scope,
+    timeout,
+    modal,
+    interval,
+    config,
+    notificationApi,
+    socialNotificationService,
+    sessionStorageService,
+    q,
+    noticeboardApi,
+    documentService,
+  ) {
+    function watchNotifications() {
+      var e = JSON.parse(sessionStorageService.getItem("Notifications.Panel"));
+      setNotificationData(e);
+      timeout(loadData, 1000);
+      scope.$watch(socialNotificationService.getOpenItem, function (e, n) {
+        e != n && null != e && 0 != e.id && scope.showItem(e.id);
+      });
+      if (b) {
+        interval.cancel(b);
+      }
+      var i = 5;
+      b = interval(function () {
+        i > 0 && loadData(), i--;
+      }, 60000);
+      scope.$on("$destroy", function (e) {
+        interval.cancel(b);
+      });
+    }
+    function loadData() {
+      if (scope.notificationViewId) {
+        scope.mentioMode = scope.unreadCommentsMode = scope.unreadNewsMode = "loading";
+        notificationApi.notifications.getOverview(scope.notificationViewId).then(function (e) {
+          setNotificationData(e);
+          sessionStorageService.setItem("Notifications.Panel", JSON.stringify(e));
+          scope.mentioMode = scope.unreadCommentsMode = scope.unreadNewsMode = "loadComplete";
+          scope.uiReady = "loadComplete";
+        });
+      }
+    }
+    function setNotificationData(e) {
+      if (null != e) {
+        e.unreadNews ? (scope.unreadNewsCount = e.unreadNews.length) : (scope.unreadNewsCount = 0);
+        scope.channelIds = e.channelIds;
+        socialNotificationService.mentioList.set(e.mentions, e.spMentions);
+        socialNotificationService.unreadNews.set(e.unreadNews);
+        if (scope.socialFeatureEnabled) {
+          socialNotificationService.unreadComments.set(e.unreadComments, e.unreadSPComments);
+        }
+      }
+    }
+    function showItem(e) {
+      var n = [];
+      _.each(scope.unreadNews.value, function (e) {
+        n.push(e.id);
+      }),
+        modal.open({
+          templateUrl: socialNotificationService.getShowItemTemplate(),
+          controller: "Wizdom365NoticeboardShowNewsController",
+          windowClass: "bootstrap-wrapper no-panel-parent",
+          size: "lg",
+          resolve: {
+            webpartId: function () {
+              return scope.notificationViewId;
+            },
+            itemInfo: function () {
+              return {
+                itemId: e,
+                shouldNotMarkRead: !0,
+                canEdit: !1,
+              };
+            },
+            item: function () {
+              var n = _.find(scope.unreadNews.value, {
+                id: e,
+              });
+              if (n) return n;
+              var i = q.defer();
+              return (
+                noticeboardApi.views.getItem(scope.notificationViewId, e).then(function (e) {
+                  i.resolve(e.newsItem);
+                }),
+                i.promise
+              );
+            },
+            pageableIds: function () {
+              return n;
+            },
+          },
+        });
+    }
+
+    scope.notificationEnabled = 1;
+    scope.notificationView;
+    scope.notificationViewId = config.Noticeboard.Notification.ViewID;
+    scope.socialFeatureEnabled = config.Noticeboard ? $.parseJSON(config.Noticeboard.SocialFeature.Enabled) : !1;
+    scope.uiReady = "";
+    scope.templateUnreadItems = "Notifications/Templates/ViewTemplates/Notification/UnreadElements.html";
+    scope.templateUnreadComments = "Notifications/Templates/ViewTemplates/Notification/UnreadComments.html";
+    scope.templateMentions = "Notifications/Templates/ViewTemplates/Notification/Mentions.html";
+    scope.channelIds = [];
+    scope.mentioItemList = socialNotificationService.mentioList.get();
+    scope.unreadComments = socialNotificationService.unreadComments.get();
+    scope.loadData = loadData;
+    scope.showItem = showItem;
+    watchNotifications();
+    var b = null;
+  }
+
+  angular.module("Wizdom365.Notification").directive("dbNotificationPanel", dbNotificationPanel);
+  dbNotificationPanelController.$inject = [
+    "$filter",
+    "$scope",
+    "$timeout",
+    "$modal",
+    "$interval",
+    "configuration",
+    "notificationApi",
+    "socialNotificationService",
+    "sessionStorageService",
+    "$q",
+    "noticeboardApi",
+    "$document",
+  ];
+
+  angular.module("Wizdom365.Notification").directive("dbNotificationBadge", dbNotificationBadge);
+  dbNotificationBadgeController.$inject = [
+    "$filter",
+    "$scope",
+    "$timeout",
+    "$modal",
+    "$interval",
+    "configuration",
+    "notificationApi",
+    "socialNotificationService",
+    "sessionStorageService",
+    "$q",
+    "noticeboardApi",
+    "$document",
+  ];
+})();
+(function () {
+  dbQueueComponent("powerPanelContentManagement", (rendElem) => {
+    rendElem(document.querySelector("[wizdom365-powerpanel]"));
+  });
+
+  dbQueueComponent("powerPanelLinks", (rendElem) => {
+    rendElem(document.querySelector("[wizdom365-powerpanel]"));
+  });
+
+  dbQueueComponent("powerPanelProfile", (rendElem) => {
+    rendElem(document.querySelector("[wizdom365-powerpanel]"));
+  });
+
+  dbQueueComponent("powerPanelITStatus", (rendElem) => {
+    rendElem(document.querySelector("[wizdom365-powerpanel]"));
+  });
+  dbQueueComponent("powerPanelYammer", (rendElem) => {
+    rendElem(document.querySelector("[wizdom365-powerpanel]"));
+  });
+  
+})();
+/* eslint-disable no-undef */
+(function () {
+  function directive(context, profileInfo) {
+    function link(scope, elem, attrs) {
+      function isArray(data) {
+        var JSON_START = /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
+        return JSON_START.test(data);
+      }
+      scope.init = function () {
+        window.EnsureScriptFunc("clienttemplates.js", "RenderUserFieldWorker", function () {
+          switch (scope.pixels = 48, "EXTRASMALL" == scope.size ? scope.pixels = 16 : "SMALL" == scope.size ? scope.pixels = 36 : "LARGE" == scope.size && (scope.pixels = 72), scope.type) {
+            case "defaultrender":
+              scope.fieldSchemaData = {
+                DefaultRender: "1"
+              };
+              break;
+            case "presenceonly":
+              scope.fieldSchemaData = {
+                PresenceOnly: "1"
+              };
+              break;
+            case "withpicturedetailview":
+              scope.fieldSchemaData = {
+                WithPictureDetailView: "1"
+              };
+              break;
+            case "withpicture":
+              scope.fieldSchemaData = {
+                WithPicture: "1"
+              };
+              break;
+            case "pictureonly":
+            default:
+              scope.fieldSchemaData = {
+                PictureOnly: "1"
+              };
+              if ("AVATAR" != scope.size) {
+                angular.extend(scope.fieldSchemaData, {
+                  PictureSize: "Size_" + scope.pixels + "px"
+                });
+              }
+          }
+          var th_field = "";
+          if (scope.linkTarget) {
+            th_field = " target=\"" + scope.linkTarget + "\" ";
+          }
+          var ctxInfo = new window.ContextInfo;
+          ctxInfo.Templates = {};
+          ctxInfo.Templates.Fields = {};
+          var userProfileUrl;
+          var type = {
+            EffectivePresenceEnabled: "1",
+            PresenceAlt: "User Presence"
+          };
+          var options = {
+            title: scope.name,
+            email: scope.email,
+            picture: scope.image,
+            sip: scope.email,
+            accountname: scope.accountname
+          };
+          var node = window.RenderUserFieldWorker(ctxInfo, scope.fieldSchemaData, options, type);
+          var u = $(node);
+          var profilePageUrl = location.origin + "/Pages/user.aspx#userid="
+          if (options.accountname && !isArray(options.accountname)) {
+            userProfileUrl = profilePageUrl + encodeURIComponent(options.accountname).replace(/\./g, "%2E");
+          } else {
+            if (options.email) {
+              userProfileUrl = profilePageUrl + "?user=" + encodeURIComponent(options.email).replace(/\./g, "%2E");
+            } else {
+              if (options.accountname && isArray(options.accountname)) {
+                userProfileUrl = profilePageUrl + "?user=" + encodeURIComponent(options.accountname).replace(/\./g, "%2E");
+              }
+            }
+          }
+          if (scope.doNotLinkToProfile || !profilePageUrl) {
+            userProfileUrl = false;
+          }
+          var o = u.find(".ms-peopleux-imgUserLink img");
+          if (o && o[0]) {
+            var result = o.attr("src");
+            result = profileInfo.getPictureUrl(options.accountname);
+            var dCurrent = new Date;
+            var overrideSubItems = (result.indexOf("?") > 0 ? "&" : "?") + "date=" + dCurrent.getDate() + dCurrent.getMonth() + dCurrent.getFullYear();
+            result = result + overrideSubItems;
+            if (result.indexOf("undefined") > -1) {
+              result = result.replace("undefined", "");
+            }
+            o.attr("src", result);
+            u.find(".ms-peopleux-userImgWrapper").html(o[0].outerHTML);
+          }
+          if ($(elem).empty(), "AVATAR" == scope.size) {
+            var f = result || u.find(".ms-peopleux-imgUserLink img").attr("src") || context.spHostUrl + "/_layouts/15/userphoto.aspx?size=M&accountname=";
+            var formattedChosenQuestion = "<div class=\"avatar-frame\"><img src=\"" + f + "\" alt=\"" + scope.email + "\" /></div>";
+            if (userProfileUrl) {
+              formattedChosenQuestion = "<div class=\"avatar-frame\"><a " + th_field + " href=\"" + userProfileUrl + "\"><img src=\"" + f + "\" alt=\"" + scope.email + "\" /></a></div>";
+            }
+            u = $("<div />", {
+              html: node
+            });
+            u.find(".ms-tableCell").first().remove();
+            u.find(".ms-peopleux-imgUserLink").html(formattedChosenQuestion);
+            $(elem).append(u);
+            window.ProcessImn();
+          } else {
+            if ("SMALLROUNDED" == scope.size || "ROUNDED" == scope.size) {
+              f = result || u.find(".ms-peopleux-imgUserLink img").attr("src") || context.spHostUrl + "/_layouts/15/userphoto.aspx?size=M&accountname=";
+              formattedChosenQuestion = "<div><img style=\"width:30px;height:30px;border-radius: 30px;\" src=\"" + f + "\" alt=\"" + scope.email + "\" /></div>";
+              if (userProfileUrl) {
+                "<div><a " + th_field + "href=\"" + userProfileUrl + "\"><img style=\"width:30px;height:30px;border-radius: 30px;\" src=\"" + f + "\" alt=\"" + scope.email + "\" /></a></div>";
+              }
+              if ("ROUNDED" == scope.size) {
+                formattedChosenQuestion = "<div><img style=\"border-radius: 30px;\" src=\"" + f + "\" alt=\"" + scope.email + "\" /></div>";
+                if (userProfileUrl) {
+                  formattedChosenQuestion = "<div><a " + th_field + "href=\"" + userProfileUrl + "\"><img style=\"border-radius: 30px;\" src=\"" + f + "\" alt=\"" + scope.email + "\" /></a></div>";
+                }
+              }
+              u = $("<div />", {
+                html: node
+              });
+              u.find(".ms-tableCell").first().remove();
+              u.find(".ms-peopleux-imgUserLink").html(formattedChosenQuestion);
+              $(elem).append(u);
+              window.ProcessImn();
+            } else {
+              $(elem).append(u);
+              window.ProcessImn();
+            }
+          }
+        });
+      };
+      scope.$watchGroup(["email", "accountname"], function (modstatus, mmCoreNotDownloadable) {
+        if (modstatus != mmCoreNotDownloadable) {
+          scope.init();
+        }
+      }, true);
+      scope.init();
+    }
+    return {
+      scope: {
+        size: "@?",
+        email: "=?",
+        accountname: "=?",
+        name: "=?",
+        url: "=?",
+        image: "=?",
+        type: "@?",
+        linkTarget: "@?",
+        doNotLinkToProfile: "@?"
+      },
+      link: link
+    };
+  }
+  angular.module("Wizdom365").directive("dbPresencePicture", directive);
+  directive.$inject = ["contextInfo", "profileService"];
+})();
+(function () {
+  function dbServiceMenuDirective() {
+    return {
+      scope: {},
+      template:
+        "<div wizdom-include='::vm.templateUrl' class=\"bootstrap-wrapper\"></div>",
+      controller: dbServiceMenuController,
+      controllerAs: "vm",
+    };
+  }
+  function dbServiceMenuController(
+    modal,
+    personalLinkApi,
+    config,
+    serviceMenuShared,
+    sessionStorageService
+  ) {
+    function r(e) {
+      scope.serviceMenu = e;
+      scope.servicemenuContainsZeroLinks = c(scope.serviceMenu.categories);
+      scope.personalizationAllowed =
+        scope.serviceMenu.allowPersonalLinks ||
+        scope.serviceMenu.allowDeleteLinks ||
+        scope.serviceMenu.allowSortLinks;
+      scope.isEmpty =
+        scope.servicemenuContainsZeroLinks && !scope.personalizationAllowed;
+    }
+    function editServiceMenu() {
+      serviceMenuShared.hide(),
+        modal
+          .open({
+            template: `
+            <div class="db-wrapper">
+  <div class="wizdom-link-collection">
+    <div class="modal-header"> <button type="button" class="close closebtn" data-ng-click="vm.dialog.cancel()"
+        aria-hidden="true">&times;</button>
+      <h1 class="modal-title">{{\'Edit links\' | translate}}</h1>
+    </div>
+    <div class="modal-body narrow-margin">
+      <div class="wizdom-linkcollection-editwebpart-container">
+        <div class="container-fluid">
+          <div class="row">
+            <div class="col-sm-12">
+              <db-edit-linklist-directive is-admin="false" access-options="vm.webpart"
+                category-datasource="vm.webpart.categories" viewid="{{vm.webpart.viewId}}">
+              </db-edit-linklist-directive>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button 
+        class="button primary xsmall ng-binding ng-scope ng-click-active"
+        ng-click="vm.dialog.save();">
+        {{\'Save\' | translate}}
+      </button>
+      <button 
+        class="button secondary xsmall ng-binding ng-scope" 
+        ng-click="vm.dialog.cancel();">
+        {{\'Cancel\' | translate}}
+      </button>
+
+    </div>
+  </div>
+</div>
+
+            `,
+            controller: "PersonalLinkEditLinksDialogController",
+            controllerAs: "vm",
+            windowClass: "bootstrap-wrapper",
+            resolve: {
+              webpart: function () {
+                return angular.copy(scope.serviceMenu);
+              },
+            },
+          })
+          .result.then(function (e) {
+            e &&
+              ((scope.serviceMenu = e.webpart),
+              (scope.LastEditLinkId = null),
+              personalLinkApi.categories
+                .setLinkOrder(
+                  scope.serviceMenu.viewId,
+                  scope.serviceMenu.categories,
+                  !1
+                )
+                .then(function (e) {
+                  var t = !0;
+                  serviceMenuShared.show(t);
+                }));
+          });
+    }
+    function renderIconOrImage(e) {
+      e.fontColor || (e.fontColor = "#FFF"),
+        e.backgroundColor || (e.backgroundColor = "#555");
+      var t = {
+        color: e.fontColor,
+        "background-color": e.backgroundColor,
+        height: "110px",
+        width: "110px",
+      };
+      return t;
+    }
+    function showEditLinkIcon() {
+      return (
+        scope.serviceMenu &&
+        scope.serviceMenu.categories &&
+        (scope.serviceMenu.allowPersonalLinks ||
+          scope.serviceMenu.allowDeleteLinks ||
+          scope.serviceMenu.allowSortLinks)
+      );
+    }
+    function c(serviceMenuCategories) {
+      return !_.some(serviceMenuCategories, function (e) {
+        return _.some(e.links);
+      });
+    }
+
+    var scope = this;
+    scope.LastEditLinkId;
+    scope.serviceMenu = null;
+    scope.isEmpty = null;
+    scope.renderIconOrImage = renderIconOrImage;
+    scope.editServiceMenu = editServiceMenu;
+    scope.showEditLinksIcon = true;
+    scope.click = function () {
+      serviceMenuShared.hide();
+    };
+    var configItems = config.Servicemenu.Items;
+    scope.templateUrl =
+      void 0 == configItems.TemplateUrl
+        ? "Servicemenu/Templates/ViewTemplates/simplelist.html"
+        : configItems.TemplateUrl;
+    serviceMenuShared.onShow(function (e) {
+
+      r(e);
+    });
+    //serviceMenuShared.show();
+  }
+  angular
+    .module("Wizdom365.Servicemenu")
+    .directive("dbServicemenu", dbServiceMenuDirective);
+  dbServiceMenuController.$inject = [
+    "$modal",
+    "personalLinkApi",
+    "configuration",
+    "dbServicemenuShared",
+    "sessionStorageService",
+  ];
+
+  function dbServiceMenuShared(
+    timeout,
+    localStorage,
+    config,
+    sessionStorage,
+    personaLinkApi
+  ) {
+    function getSessionItem() {
+      return JSON.parse(sessionStorage.getItem(s.cacheKey));
+    }
+    function setSessionItem(val) {
+      val.timestamp = new Date();
+      sessionStorage.setItem(s.cacheKey, JSON.stringify(val));
+    }
+    function timeStamp(val) {
+      var d = new Date(val);
+      var now = new Date();
+      var i = 5;
+      var postedAt = new Date(d.getTime() + 6e4 * i);
+      return postedAt > now;
+    }
+
+    var s = this;
+
+    s.onShowCallback = undefined;
+    // s.onAfterShowCallbacks = [];
+    s.onHideCallbacks = [];
+    s.isOpen = false;
+    s.cacheKey = "ServicemenuV1";
+    this.trigger = function () {
+      if (this.isOpen) {
+        s.hide();
+      } else {
+        s.show();
+      }
+    };
+    this.onShow = function (callback) {
+      s.onShowCallback = callback;
+      this.show();
+    };
+    // this.onAfterShow = function (callback) {
+    //   s.onAfterShowCallbacks.push({
+    //     invoke: callback,
+    //   });
+    // };
+    this.show = function (saveCallBack) {
+     
+      if (typeof saveCallBack === "undefined") {
+        saveCallBack = false;
+      }
+      var sessionItem = getSessionItem();
+      if (sessionItem && timeStamp(sessionItem.timestamp) && !saveCallBack) {
+        s.onShowCallback(sessionItem);
+        timeout(function () {
+          s.onShowCallback(sessionItem);
+        }, 0);
+      } else {
+        s.getData(config.Servicemenu.Items.ViewId).then(function (result) {
+        s.onShowCallback(result);
+        //   timeout(function () {
+        //     angular.forEach(s.onAfterShowCallbacks, function (complete) {
+        //       complete.invoke(result);
+        //     });
+        //   }, 0);
+          setSessionItem(result);
+        });
+      }
+      s.isOpen = true;
+    };
+    this.onHide = function (callback) {
+      s.onHideCallbacks.push({
+        invoke: callback,
+      });
+    };
+    this.hide = function () {
+      s.isOpen = false;
+      angular.forEach(s.onHideCallbacks, function (fn) {
+        fn.invoke();
+      });
+    };
+    this.getData = function (viewId) {
+      return personaLinkApi.views.getOrAddView(viewId, false);
+    };
+
+    return this;
+  }
+  angular
+    .module("Wizdom365")
+    .factory("dbServicemenuShared", dbServiceMenuShared);
+  dbServiceMenuShared.$inject = [
+    "$timeout",
+    "localStorageService",
+    "configuration",
+    "sessionStorageService",
+    "personalLinkApi",
+  ];
+
+  function dbEditLinklistDirective(webpartPropertiesService) {
+    function i(e, n, i, o) {
+      "undefined" == typeof jQuery.ui
+        ? $.getScript(window.wizdomResources.js.JqueryUI)
+            .done(function (r, a) {
+              console.info("Jquery UI js loaded"),
+                e.$applyAsync(function () {
+                  t(e, n, i, o);
+                });
+            })
+            .fail(function (e, t, n) {
+              console.error("Jquery UI load failed in EditLinklist.ts");
+            })
+        : t(e, n, i, o);
+    }
+    return {
+      scope: {
+        categoryDatasource: "=",
+        accessOptions: "=",
+        viewid: "@",
+        isAdmin: "@",
+        createCategories: "=",
+        onChange: "&",
+        onLinkMoved: "&",
+      },
+      template: `
+        <div class="panel panel-default">
+  <div class="panel-body">
+    <div class="link-sortable link-collection-content">
+      <div class="link-collection-content"
+        ng-if="category.name == 'Favorite links' " ng-repeat="(catIdx, category) in vm.categoryDatasource"
+        ng-init="categoryIcon = category.id == 0 ? \'glyphicon-list-alt\' : \'glyphicon-folder-close\'">
+        <div class="link-category">
+          <div class="float-wrapper">
+            <div class="pull-left">
+    
+                <span ng-if="category.name == \'Uncategorized\'">{{category.name | translate}}</span>
+                <span ng-if="category.name != \'Uncategorized\'">{{category.name}}</span>
+            </div>
+          </div>
+          <div class="float-wrapper">
+            <div class="pull-right" style="padding: 5px 0 5px 5px; margin-right: 12px;">
+              <span ng-if="vm.accessOptions.isAdmin || vm.accessOptions.allowPersonalLinks"
+                class="link-move-container"><a
+                  ng-click="vm.accessOptions.isAdmin ? vm.addPredefinedLink(category) : vm.addPersonalLink(category)"><span
+                    class="wt-linkText ng-binding"
+                    title="{{(vm.accessOptions.isAdmin ? \'Add predefined link\' : \'Create link\') | translate}}">{{(vm.accessOptions.isAdmin ? \'Add predefined link\' :
+                    \'Create link\') | translate}}</span></a></span>
+            </div>
+          </div>
+        </div>
+        <div ui-sortable="vm.sortableOptions" class="categorylinks-container" ng-model="category.links">
+          <div class="link-container" ng-repeat="link in category.links"
+            ng-class="link.type === 3 || vm.accessOptions.isAdmin || vm.accessOptions.allowSortLinks ? \'sortable\' : \'not-sortable\'">
+            <div class="link">
+              <div class="float-wrapper">
+                <div class="pull-left">
+                  <span ng-bind="link.name"></span>
+                </div>
+              </div>
+              <div ng-if="vm.accessOptions.isAdmin" class="float-wrapper">
+                <div class="pull-right">
+                  <span class="link-move-container"><a><i class="glyphicon glyphicon-arrow-up"
+                        ng-click="vm.moveLink(link, $index, catIdx, -1)"></i></a>
+                    <a><i class="glyphicon glyphicon-arrow-down"
+                        ng-click="vm.moveLink(link, $index, catIdx, 1)"></i></a></span>
+                  <a><i class="glyphicon glyphicon-pencil" ng-class="{\'icon-hidden\': link.type === 1}"
+                      ng-click="vm.editPredefinedLink(category.id, $index, link)"></i></a>
+                  <a><i class="glyphicon glyphicon-trash" ng-click="vm.removeLinkAdmin($index, link)"></i></a>
+                </div>
+              </div>
+              <div ng-if="!vm.accessOptions.isAdmin" class="float-wrapper">
+                <div class="pull-right">
+                  <span ng-if="vm.accessOptions.allowSortLinks || link.type === 3" class="link-move-container"><a><i
+                        class="glyphicon glyphicon-arrow-up" ng-click="vm.moveLink(link, $index, catIdx, -1)"></i></a>
+                    <a><i class="glyphicon glyphicon-arrow-down"
+                        ng-click="vm.moveLink(link, $index, catIdx, 1)"></i></a></span>
+                  <a><i class="glyphicon glyphicon-pencil" ng-class="{\'icon-hidden\': link.type !== 3}"
+                      ng-click="vm.editPredefinedLink(category.id, $index, link)"></i></a>
+                  <a><i class="glyphicon glyphicon-trash"
+                      ng-class="{\'icon-hidden\': !vm.accessOptions.allowDeleteLinks && link.type !== 3}"
+                      ng-click="vm.removeLinkUser($index, link)"></i></a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+        `,
+      link: i,
+      controller: dbEditLinklistController,
+      controllerAs: "vm",
+    };
+  }
+  function t(e, t, n, i) {
+    (i.categoryDatasource = e.categoryDatasource),
+      (i.accessOptions = e.accessOptions || {}),
+      (i.accessOptions.isAdmin = "true" == e.isAdmin),
+      (i.viewId = e.viewid),
+      (i.createCategories = e.createCategories),
+      (i.onChange = e.onChange || function () {}),
+      (i.onLinkMoved = e.onLinkMoved || function () {}),
+      e.$watch("categoryDatasource", function (t, n) {
+        t != n && (i.categoryDatasource = e.categoryDatasource);
+      });
+  }
+  function dbEditLinklistController(
+    modal,
+    filter,
+    query,
+    personalLinkApi,
+    notificationService,
+    r
+  ) {
+    function a(e, t) {
+      var n = function () {},
+        i = {
+          text: e,
+          modal: !0,
+          type: "notification",
+          layout: "center",
+          successCalback: t,
+          cancelCalback: n,
+        };
+      notificationService.showConfirmationDialog(i);
+    }
+    function removeLinkAdmin(e, n) {
+      a(
+        filter("translate")("Are you sure you want to delete this link? "),
+        function () {
+          1 === n.type
+            ? personalLinkApi.links
+                .unAssignCorpLinksFromView({
+                  key: thisController.viewId,
+                  value: [n],
+                })
+                .then(function (t) {
+                  var i = _.findWhere(thisController.categoryDatasource, {
+                    id: n.userCategoryID,
+                  });
+                  i.links.splice(e, 1), thisController.onChange();
+                })
+            : personalLinkApi.links.deleteLink(n.id).then(function (t) {
+                var i = _.findWhere(thisController.categoryDatasource, {
+                  id: n.userCategoryID,
+                });
+                i.links.splice(e, 1), thisController.onChange();
+              });
+        }
+      );
+    }
+    function removeLinkUser(e, n) {
+      a(
+        filter("translate")("Are you sure you want to delete this link? "),
+        function () {
+          switch (n.type) {
+            case 1:
+            case 2:
+              personalLinkApi.links
+                .addToDeniedList(thisController.viewId, n)
+                .then(function (t) {
+                  var i = _.findWhere(thisController.categoryDatasource, {
+                    id: n.userCategoryID,
+                  });
+                  i.links.splice(e, 1), thisController.onChange();
+                });
+              break;
+            case 3:
+              personalLinkApi.links.deleteLink(n.id).then(function (t) {
+                var i = _.findWhere(thisController.categoryDatasource, {
+                  id: n.userCategoryID,
+                });
+                i.links.splice(e, 1), thisController.onChange();
+              });
+          }
+        }
+      );
+    }
+    function moveLink(e, t, n, i) {
+      var o = t,
+        r = o + i,
+        a =
+          !thisController.accessOptions.isAdmin &&
+          !thisController.accessOptions.allowSortLinks;
+      if (
+        !(
+          0 > r ||
+          r > thisController.categoryDatasource[n].links.length - 1 ||
+          (a && 3 != e.type)
+        )
+      ) {
+        if (r >= thisController.categoryDatasource[n].links.length)
+          for (
+            var l = r - thisController.categoryDatasource[n].links.length;
+            l-- + 1;
+
+          )
+            thisController.categoryDatasource[n].links.push(void 0);
+        thisController.categoryDatasource[n].links.splice(
+          r,
+          0,
+          thisController.categoryDatasource[n].links.splice(o, 1)[0]
+        ),
+          thisController.onLinkMoved();
+      }
+    }
+    function createCategory() {
+      var e = {
+        id: 0,
+        name: "",
+        links: [],
+      };
+      editCategoryModal(e).then(function (e) {
+        null !== e &&
+          thisController.categoryDatasource.push({
+            id: e.id,
+            name: e.name,
+            collapsed: !0,
+            links: e.links,
+          }),
+          thisController.onChange();
+      });
+    }
+    function editCategory(e) {
+      editCategoryModal(e).then(function (t) {
+        t && (e.name = t.name), thisController.onChange();
+      });
+    }
+    function removerCategory(e) {
+      a(
+        filter("translate")(
+          "Are you sure you want to delete this group? \nAll related data will be removed too"
+        ),
+        function () {
+          personalLinkApi.categories
+            .deleteUserCategory(e.id)
+            .then(function (t) {
+              _.remove(thisController.categoryDatasource, function (t) {
+                return t.id === e.id;
+              }),
+                thisController.onChange();
+            });
+        }
+      );
+    }
+    function editCategoryModal(t) {
+      return modal.open({
+        templateUrl:
+          "PersonalLink/Templates/Dialogs/CreateEditLinkCategory.html",
+        controller: "Wizdom365PersonalLinkCreateEditCategoryController",
+        controllerAs: "vm",
+        windowClass: "bootstrap-wrapper",
+        size: "sm",
+        resolve: {
+          category: function () {
+            return {
+              id: t.id,
+              name: t.name,
+              links: [],
+            };
+          },
+          categoryNames: function () {
+            return _.map(thisController.categories, function (e) {
+              return e.name;
+            });
+          },
+          categoryType: function () {
+            return "user";
+          },
+          viewId: function () {
+            return thisController.viewId;
+          },
+        },
+      }).result;
+    }
+    function addCorporateLinks() {
+      modal
+        .open({
+          templateUrl: "PersonalLink/Templates/Dialogs/AddCorporateLink.html",
+          controller: "Wizdom365PersonalLinkAddCorporateLinkController",
+          controllerAs: "vm",
+          windowClass: "bootstrap-wrapper",
+          size: "md",
+          resolve: {
+            links: function () {
+              var e = [];
+              return (
+                _.each(thisController.categoryDatasource, function (t) {
+                  _.each(t.links, function (t) {
+                    1 == t.type && e.push(t);
+                  });
+                }),
+                e
+              );
+            },
+          },
+        })
+        .result.then(function (e) {
+          if (e) {
+            var t = _.map(e, function (e) {
+                return e.id;
+              }),
+              o = [],
+              r = [];
+            _.each(thisController.categoryDatasource, function (t) {
+              _.each(t.links, function (t) {
+                var n = _.findIndex(e, function (e, n) {
+                  return 1 === t.type && e.id == t.id;
+                });
+                n > -1 && r.push(e[n]);
+              });
+            });
+            var a = _.map(r, function (e) {
+              return e.id;
+            });
+            o = _.difference(t, a).map(function (t) {
+              var n = _.findWhere(e, {
+                id: t,
+              });
+              return n;
+            });
+            var l = [];
+            _.each(thisController.categoryDatasource, function (t) {
+              _.each(t.links, function (n, i) {
+                if (1 == n.type) {
+                  var o = _.findIndex(e, function (e, t) {
+                    return e.id == n.id;
+                  });
+                  -1 == o && l.push(t.links[i]);
+                }
+              }),
+                _.each(l, function (e, n) {
+                  _.remove(t.links, {
+                    id: e.id,
+                  });
+                });
+            });
+            var s =
+                o.length > 0
+                  ? personalLinkApi.links.assignCorpLinksToView(
+                      thisController.categoryDatasource[0].id,
+                      {
+                        key: thisController.viewId,
+                        value: o,
+                      }
+                    )
+                  : null,
+              c =
+                l.length > 0
+                  ? personalLinkApi.links.unAssignCorpLinksFromView({
+                      key: thisController.viewId,
+                      value: l,
+                    })
+                  : null;
+            query.all([s, c]).then(function (e) {
+              _.each(o, function (e, t) {
+                thisController.categoryDatasource[0].links.push(e);
+              }),
+                thisController.onChange();
+            });
+          }
+        });
+    }
+    function addPredefinedLink(e) {
+      var t = {
+        id: 0,
+        name: "",
+        type: 2,
+        url: "",
+        description: "",
+        imageUrl: "",
+        openInNewWindow: !1,
+        userCategoryID: e.id,
+      };
+      createEditLinkModal(t, "Create link").then(function (e) {
+        if (e) {
+          var t = _.findWhere(thisController.categoryDatasource, {
+            id: e.userCategoryID,
+          });
+          t.links.push(e);
+        }
+        thisController.onChange();
+      });
+    }
+    function addPersonalLink(e) {
+      var t = {
+        id: 0,
+        name: "",
+        type: 3,
+        url: "",
+        description: "",
+        imageUrl: "",
+        openInNewWindow: !1,
+        userCategoryID: e.id,
+      };
+      createEditLinkModal(t, "Create personal link").then(function (e) {
+        if (e) {
+          var t = _.findWhere(thisController.categoryDatasource, {
+            id: e.userCategoryID,
+          });
+          t.links.push(e);
+        }
+        thisController.onChange();
+      });
+    }
+    function editPredefinedLink(e, t, n) {
+      (n.userCategoryID = e),
+        createEditLinkModal(n, "Edit link").then(function (n) {
+          if (e != n.userCategoryID) {
+            var i = _.findWhere(thisController.categoryDatasource, {
+              id: e,
+            });
+            i.links.splice(t, 1);
+            var o = _.findWhere(thisController.categoryDatasource, {
+              id: n.userCategoryID,
+            });
+            o.links.push(n);
+          } else {
+            var r = _.findWhere(thisController.categoryDatasource, {
+              id: e,
+            });
+            r.links[t] = n;
+          }
+          thisController.onChange();
+        });
+    }
+    function createEditLinkModal(t, n) {
+      return modal.open({
+        template: `
+        <div class="db-wrapper">
+        <div class="modal-header"> <button type="button" class="close closebtn" data-ng-click="vm.dialog.cancel()"
+    aria-hidden="true">&times;</button>
+  <h1 class="modal-title">{{vm.title | translate}}</h1>
+</div>
+<div class="modal-body link-collection-content wizdom-link-collection">
+  <form name="form" role="form" novalidate>
+    <div class="container-fluid">
+      <div class="form-group"> <label class="control-label"> {{\'Link title *\' | translate}} </label> <input type="text"
+          class="form-control" required ng-model="vm.link.name" ng-disabled="vm.link.isSystemLink" /> </div>
+      <div class="form-group"> <label class="control-label"> {{\'Web address\' | translate}} </label> <input type="text"
+          class="form-control" ng-model="vm.link.url"
+          DISABLEDvalidate="{ required: true,                      smarturl: true }" ng-change="vm.validateUrl()"
+          required name="url" show-validation-messages="false" ng-disabled="vm.link.isSystemLink" />
+        <p>
+          <div class="alert alert-warning" ng-show="form.url.$touched && form.url.$valid && vm.showUrlWarning">
+            {{"The url address does not look right, are you sure it\'s correct?" | translate}}</div>
+        </p>
+      </div>
+        <div class="form-group">
+          <div class="checkbox"> <label> <input type="checkbox" ng-model="vm.link.openInNewWindow" />
+              {{"Open in new window" | translate}} </label> </div>
+        </div>
+
+    </div>
+  </form>
+</div>
+<div class="modal-footer">
+  <button class="btn btn-default wiz-btn-padding" ng-click="vm.dialog.cancel();">
+    {{\'Cancel\' | translate}} </button>
+  <button class="btn btn-primary wiz-btn-padding" ng-disabled="form.$invalid || vm.saving" ng-click="vm.dialog.save();">
+    {{\'Save\' | translate}} </button>
+</div>
+</div>
+`,
+        controller: "Wizdom365PersonalLinkCreateEditLinkController",
+        controllerAs: "vm",
+        windowClass: "bootstrap-wrapper",
+        size: "md",
+        resolve: {
+          link: function () {
+            return t;
+          },
+          title: function () {
+            return n;
+          },
+          categories: function () {
+            return thisController.categoryDatasource;
+          },
+          viewId: function () {
+            return thisController.viewId;
+          },
+          isAdmin: function () {
+            return thisController.accessOptions.isAdmin;
+          },
+        },
+      }).result;
+    }
+    var thisController = this;
+    (thisController.addCorporateLinks = addCorporateLinks),
+      (thisController.addPredefinedLink = addPredefinedLink),
+      (thisController.editPredefinedLink = editPredefinedLink),
+      (thisController.addPersonalLink = addPersonalLink),
+      (thisController.createCategory = createCategory),
+      (thisController.editCategory = editCategory),
+      (thisController.removeCategory = removerCategory),
+      (thisController.moveLink = moveLink),
+      (thisController.removeLinkAdmin = removeLinkAdmin),
+      (thisController.removeLinkUser = removeLinkUser);
+    var C = -1;
+    thisController.sortableOptions = {
+      items: ".link-container:not(.not-sortable)",
+      connectWith: ".categorylinks-container",
+      update: function (e, t) {
+        e && e.timeStamp === C && thisController.onLinkMoved(),
+          (C = e.timeStamp);
+      },
+    };
+  }
+  angular
+    .module("Wizdom365.PersonalLink")
+    .directive("dbEditLinklistDirective", dbEditLinklistDirective);
+  dbEditLinklistDirective.$inject = ["webpartPropertiesService"];
+  dbEditLinklistController.$inject = [
+    "$modal",
+    "$filter",
+    "$q",
+    "personalLinkApi",
+    "notificationService",
+  ];
+})();
+/* eslint-disable no-undef */
+/* eslint-disable no-useless-escape */
+(function () {
+  angular.module("Wizdom365").run([
+    "$templateCache",
+    function ($templateCache) {
+      $templateCache.put(
+        "FAQ/Templates/Dialogs/EditQuestion.html",
+        `<div class="faq-editQuestion"> <div class="modal-header"> <button type="button" class="close closebtn" data-ng-click="cancel()" aria-hidden="true">&times;</button> <h1 class="modal-title">{{\'Edit question\' | translate}}</h1> </div> <div class="modal-body"> <form> <div class="row"> <div class="col-sm-12"> <div class="form-group"> <label class="control-label">{{\'Question\' | translate}}</label> <input type="text" class="form-control ie11focusfix" ng-model="question.question" /> </div> <div class="form-group"> <label class="control-label">{{\'Answer\' | translate}}</label> <textarea class="form-control" ng-model="question.answer" style="height:200px" required toolbar-configuration="FAQ" ui-tinymce="tinyMceOptions" /> </div> </div> </div> </form> </div> <div class="modal-footer"> <button class="btn btn-primary wiz-btn-padding" ng-click="save()">{{\'Save\' | translate}}</button> <button class="btn btn-default wiz-btn-padding" ng-click="cancel();">{{\'Cancel\' | translate}}</button> </div> </div>`,
+      );
+      $templateCache.put(
+        "FAQ/Templates/Dialogs/EditWebpart.html",
+        `<div class="faqEditWebpart"> <div class="modal-header"> <button type="button" class="close closebtn" data-ng-click="cancel()" aria-hidden="true">&times;</button> <h1 class="modal-title">{{\'Accordion\' | translate}}</h1> </div> <div class="modal-body"> <div wizdom365-spinner="" loading="loading"></div> <div ng-hide="loading"> <div class="row"> <div class="col-sm-12"> <div class="link-sortable link-collection-content"> <div class="form-group"> <label class="control-label">{{\'Template\' | translate}}</label> <wizdom365-template-picker template-url="webpartProperties.templateUrl" directory-path="FAQ/Templates/ViewTemplates"></wizdom365-template-picker> </div> <div ng-show="view.useGlobalSet"> <select data-ng-model="view.faqSet" ng-options="t.title for t in globalSets track by t.id" class="form-control"></select> </div> <div ng-hide="view.useGlobalSet"> <div class="form-group"> <label class="control-label">{{\'Title\' | translate}}</label> <div class="wt-paddingTopSmall"><input type="text" class="form-control" ng-model="view.faqSet.title"></div> </div> <div ui-sortable="sortableOptionsCategory" class="category-container" ng-model="view.faqSet.categories"> <div class="link-collection-content sortable" ng-repeat="category in view.faqSet.categories track by $index"> <div class="link-category"> <div class="float-wrapper"> <div class="pull-left"> <a class="categoryLink"> <i class="glyphicon" ng-class="category.isRoot ? \'glyphicon-list-alt\' : \'glyphicon-folder-close\'"> </i> <span ng-if="!category.isRoot"> {{category.title}} </span> <span ng-if="category.isRoot"> {{\'Accordion list\' | translate}} </span> </a> </div> </div> <div class="float-wrapper"> <div class="pull-right" style="padding: 5px; margin-right: 12px;"> <span class="link-move-container"> <a ng-if="$index > 0"><i class="glyphicon glyphicon-arrow-up" ng-click="moveCategory($index, -1, category)"></i></a> <a ng-if="$index < view.faqSet.categories.length - 1"><i class="glyphicon glyphicon-arrow-down" ng-click="moveCategory($index, 1, category)"></i></a> <a ng-click="editQuestion({isTopFAQ : true},category,true)"> <i class="ms-Icon ms-Icon--Add"></i> <!--<span class="wt-linkText ng-binding" title="{{\'Add question\' | translate}}">                               {{\'Add question\' | translate}}                             </span>--> </a> </span> <a ng-hide="category.isRoot"> <i class="glyphicon glyphicon-pencil" ng-click="editCategory(category,false)"> </i> </a> <a ng-hide="category.isRoot"> <i class="glyphicon glyphicon-trash" ng-click="deleteCategory($index)"> </i> </a> </div> </div> </div> <div ui-sortable="sortableOptions" class="categorylinks-container" ng-model="category.questions"> <div class="link-container sortable" ng-repeat="question in category.questions"> <div class="link"> <div class="float-wrapper"> <div class="pull-left"> <span ng-bind="question.question"></span> </div> </div> <div class="float-wrapper"> <div class="pull-right"> <span class="link-move-container"> <a ng-if="$index > 0"> <i class="glyphicon glyphicon-arrow-up" ng-click="moveQuestion($index, -1, category)"> </i> </a> <a ng-if="$index < category.questions.length - 1"> <i class="glyphicon glyphicon-arrow-down" ng-click="moveQuestion($index, 1, category)"> </i> </a> </span> <a><i class="glyphicon glyphicon-pencil" ng-click="editQuestion(question,category,false)"> </i></a> <a><i class="glyphicon glyphicon-trash" ng-click="deleteQuestion($index,category)"></i> </a> </div> </div> </div> </div> </div> </div> </div> </div> </div> </div> </div> </div> </div> <div class="modal-footer"> <button class="btn btn-primary wiz-btn-padding" ng-disabled="loading" ng-click="save();">{{\'Save\' | translate}}</button> <button class="btn btn-default wiz-btn-padding" ng-disabled="loading" ng-click="cancel();">{{"Cancel" | translate}}</button> </div> </div>`,
+      );
+      $templateCache.put(
+        "PersonalLink/Templates/Dialogs/CreateEditLink.html",
+        `<div class="modal-header"> <button type="button" class="close closebtn" data-ng-click="vm.dialog.cancel()" aria-hidden="true">&times;</button> <h1 class="modal-title">{{vm.title | translate}}</h1></div><div class="modal-body link-collection-content wizdom-link-collection"> <form name="form" role="form" novalidate> <div class="container-fluid"> <div class="form-group"> <label class="control-label">{{'Name' | translate}}</label> <input type="text" class="form-control" required ng-model="vm.link.name" ng-disabled="vm.link.isSystemLink"/> </div><div class="form-group"> <label class="control-label">{{'URL' | translate}}</label> <input type="text" class="form-control" ng-model="vm.link.url" DISABLEDvalidate="{required: true, smarturl: true}" ng-change="vm.validateUrl()" required name="url" show-validation-messages="false" ng-disabled="vm.link.isSystemLink"/> <p> <div class="alert alert-warning" ng-show="form.url.$touched && form.url.$valid && vm.showUrlWarning">{{"The url address does not look right, are you sure it's correct?" | translate}}</div></p></div><div class="form-group"> <label class="control-label">{{'Description' | translate}}</label> <textarea rows="4" type="text" class="form-control" ng-model="vm.link.description"></textarea> </div><div ng-if="vm.link.type !=1" class="form-group"> <label class="control-label">{{'Category' | translate}}</label> <select class='form-control' ng-model='vm.selectedCategory'> <option ng-repeat="category in vm.categories" ng-if="category.name=='Uncategorized'" ng-selected="category==vm.selectedCategory" ng-value="category">{{category.name | translate}}</option> <option ng-repeat="category in vm.categories" ng-if="category.name !='Uncategorized'" ng-selected="category==vm.selectedCategory" ng-value="category">{{category.name}}</option> </select> </div><div> <div class="checkbox"> <label> <input type="checkbox" ng-model="vm.link.openInNewWindow"/>{{'Open in new window' | translate}}</label> </div></div></div></form></div><div class="modal-footer"> <button class="btn btn-default wiz-btn-padding" ng-click="vm.dialog.cancel();">{{'Cancel' | translate}}</button> <button class="btn btn-primary wiz-btn-padding" ng-disabled="form.$invalid || vm.saving" ng-click="vm.dialog.save();">{{'Save' | translate}}</button></div>`,
+      );
+      $templateCache.put(
+        "PersonalLink/Templates/Dialogs/EditWebpart.html",
+        `<div class="modal-header"> <button type="button" class="close closebtn" data-ng-click="vm.dialog.close()" aria-hidden="true" > &times; </button> <h1 class="modal-title">{{'Link collection' | translate}}</h1></div><div class="modal-body"> <div class="row"> <div class="col-sm-12"> <ul class="nav nav-tabs"> <li role="presentation" ng-class="{active: vm.dialog.isActive('editview')}" > <a href="" ng-click="vm.dialog.changeView('editview')">{{'Properties' | translate}}</a> </li><li role="presentation" ng-class="{active: vm.dialog.isActive('editpredefinedlinks')}" > <a href="" ng-click="vm.dialog.changeView('editpredefinedlinks')">{{'Predefined links' | translate}}</a> </li></ul> </div></div><div class="row"> <div class="col-sm-12 wizdom-link-collection"> <div ng-show="vm.dialog.mode=='editview'"> <form role="form"> <div class="form-group"> <label class="control-label" for="personalLinksTitle">{{'Title' | translate}}</label> <input type="text" class="form-control" id="personalLinksTitle" ng-model="vm.webpartProperties.title"/> </div><div class="form-group"> <label class="control-label">{{'Template' | translate}}</label> <wizdom365-template-picker template-url="vm.webpartProperties.templateUrl" directory-path="PersonalLink/Templates/ViewTemplates" > </wizdom365-template-picker> </div></form> </div><div ng-show="vm.dialog.mode=='editpredefinedlinks'"> <wizdom365-edit-linklist is-admin="true" viewid="{{vm.webpart.viewId}}" create-categories="true" category-datasource="vm.webpart.categories" > </wizdom365-edit-linklist> </div></div></div></div><div class="modal-footer"> <button class="btn btn-default wiz-btn-padding" ng-click="vm.dialog.save();">{{'Close' | translate}}</button></div>`,
+      );
+      $templateCache.put(
+        "Noticeboard/Templates/Dialogs/DanskeCreateLocalNew.html",
+        `<div class="db-wrapper"> <div class="noticeboard-modal"> <div class="modal-header bootstrap-wrapper"> <button type="button" class="close closebtn" data-ng-click="cancel()" aria-hidden="true" > &times; </button> <h3 class="modal-title">{{(editItem !=null ? 'Edit' : 'Create local news article') | translate}}{{editItem !=null ? (': ' + editItem.heading) : ''}}</h3> </div><div class="modal-body bootstrap-wrapper"> <h4 class="content-header-1" ng-show="mode=='firstScene'">{{'Select topic(s)' | translate}}</h4> <div ng-show="mode=='loading'" class="container-fluid"> <div class="spinner"></div></div><div class="container-fluid" ng-show="mode=='firstScene'"> <div class="row"> <div class="col-sm-12"> <div ng-show="channelsTree.length > 0"> <div class="channel-tree-root" ng-repeat="channelTree in channelsTree" > <div ng-repeat="firstChild in channelTree.childs"> <h5 class="pointer" ng-click="firstChild.show=!firstChild.show" >{{firstChild.name}} ({{firstChild.selectedChannelsCount}})<span class="pull-right ms-Icon" ng-class="{'ms-Icon--ChevronUp': firstChild.show, 'ms-Icon--ChevronDown': !firstChild.show}" ></span> </h5> <div ng-show="firstChild.show" class="channel-items"> <ul class="channel-tree"> <li> <div class="channel-item db-control"> <input class="input-checkbox" type="checkbox" ng-checked="firstChild.selectedChannelsCount !==0"/> <label ng-class="{'indeterminate': firstChild.allChildrenCount - firstChild.selectedChannelsCount !==firstChild.disabledChannelsCount}" ng-click="selectParentChannel(firstChild, (firstChild.allChildrenCount - firstChild.selectedChannelsCount !==firstChild.disabledChannelsCount ? true : false), true)" > All </label> </div></li><li ng-repeat="channel in firstChild.childs" wizdom-include="'channelTree'" ></li></ul> </div></div></div></div><div ng-show="channelsTree.length==0"> <div class="alert alert-warning" role="alert"> Topics were filtered out by user choice. To see all available topics click <a href="" ng-click="showHideChannels()"> here </a> </div></div></div></div><script type="text/ng-template" id="channelTree"> <div class="channel-item db-control"> <input class="input-checkbox" type="checkbox" ng-if="channel.enabled" checklist-model="selectedchannels" checklist-value="channel.id" > <input class="input-checkbox" type="checkbox" ng-if="!channel.enabled" ng-checked="channel.selectedChannelsCount !==0" > <label ng-class="{'indeterminate': !channel.enabled ? channel.allChildrenCount !==channel.selectedChannelsCount : false}" ng-click="!channel.enabled ? selectParentChannel(channel, (channel.allChildrenCount - channel.selectedChannelsCount !==channel.disabledChannelsCount ? true : false), true) : selectItem(channel)">{{channel.name}}</label> </div><ul ng-if="channel.childs"> <li ng-repeat="channel in channel.childs" wizdom-include="'channelTree'"></li></ul> </script> </div><div class="container-fluid" ng-show="mode=='secondScene'"> <div id="secondpan"><div wizdom-include="templateUrl"></div></div></div><div ng-show="mode=='nodata'"> <div class="alert alert-warning" role="alert">{{'To create elements you need to have at least one channel and related content type' | translate}}</div></div></div><div class="modal-footer bootstrap-wrapper" ng-show="mode=='firstScene' || mode=='secondScene'" > <div class="fact-box light-blue" ng-if="mode=='firstScene'"> <span>Do you have a suggestion for a new topic?</span> <span> <a href="mailto:JACLAU@danskebank.dk?subject=Local news channel"> Send suggestion </a> </span> </div><div class="noticeboard-modal-actions"> <div> <button type="submit" ng-if="mode=='secondScene'" class="button primary xsmall" ng-click="save()" ng-disabled="form.$invalid" >{{'Publish' | translate}}</button> <button type="button" ng-if="mode=='secondScene'" class="button secondary xsmall" ng-click="back()" >{{'Back' | translate}}</button> <button type="submit" ng-if="mode=='firstScene'" class="button primary xsmall" ng-click="next();" ng-disabled="selectedchannels.length==0" >{{'Next' | translate}}</button> <button type="submit" ng-if="mode=='firstScene'" class="button secondary xsmall" ng-click="cancel();" >{{'Cancel' | translate}}</button> </div><div> <button type="submit" ng-if="editItem !=null" ng-show="mode=='firstScene' || mode=='secondScene'" class="button secondary xsmall" ng-click="deleteNewsItem(editItem.id)" >{{'Delete' | translate}}</button> <button type="submit" ng-if="mode=='secondScene'" class="button secondary xsmall" ng-click="cancel();" >{{'Cancel' | translate}}</button> </div></div></div></div></div>`,
+      );
+      $templateCache.put(
+        "Noticeboard/Templates/Dialogs/DanskeCreateEvent.html",
+        `<div class="db-wrapper"> <div class="noticeboard-modal"> <div class="modal-header bootstrap-wrapper"> <button type="button" class="close closebtn" data-ng-click="cancel()" aria-hidden="true" > &times; </button> <h3 class="modal-title">{{(editItem !=null ? 'Edit' : 'Create event') | translate}}{{editItem !=null ? (': ' + editItem.heading) : ''}}</h3> </div><div class="modal-body bootstrap-wrapper"> <h4 class="content-header-1" ng-show="mode=='firstScene'">{{'Select location(s)' | translate}}</h4> <div ng-show="mode=='loading'" class="container-fluid"> <div class="spinner"></div></div><div class="container-fluid" ng-show="mode=='firstScene'"> <div class="row"> <div class="col-sm-12"> <div ng-show="channelsTree.length > 0"> <div class="channel-tree-root" ng-repeat="channelTree in channelsTree" > <div ng-repeat="firstChild in channelTree.childs"> <h5 class="pointer" ng-click="firstChild.show=!firstChild.show" >{{firstChild.name}} ({{firstChild.selectedChannelsCount}})<span class="pull-right ms-Icon" ng-class="{'ms-Icon--ChevronUp': firstChild.show, 'ms-Icon--ChevronDown': !firstChild.show}" ></span> </h5> <div ng-show="firstChild.show" class="channel-items"> <ul class="channel-tree"> <li> <div class="channel-item db-control"> <input class="input-checkbox" type="checkbox" ng-checked="firstChild.selectedChannelsCount !==0"/> <label ng-class="{'indeterminate': firstChild.allChildrenCount - firstChild.selectedChannelsCount !==firstChild.disabledChannelsCount}" ng-click="selectParentChannel(firstChild, (firstChild.allChildrenCount - firstChild.selectedChannelsCount !==firstChild.disabledChannelsCount ? true : false), true)" > All </label> </div></li><li ng-repeat="channel in firstChild.childs" wizdom-include="'channelTree'" ></li></ul> </div></div></div></div><div ng-show="channelsTree.length==0"> <div class="alert alert-warning" role="alert"> Locations were filtered out by user choice. To see all available locations click <a href="" ng-click="showHideChannels()"> here </a> </div></div></div></div><script type="text/ng-template" id="channelTree"> <div class="channel-item db-control"> <input class="input-checkbox" type="checkbox" ng-if="channel.enabled" checklist-model="selectedchannels" checklist-value="channel.id" > <input class="input-checkbox" type="checkbox" ng-if="!channel.enabled" ng-checked="channel.selectedChannelsCount !==0" > <label ng-class="{'indeterminate': !channel.enabled ? channel.allChildrenCount !==channel.selectedChannelsCount : false}" ng-click="!channel.enabled ? selectParentChannel(channel, (channel.allChildrenCount - channel.selectedChannelsCount !==channel.disabledChannelsCount ? true : false), true) : selectItem(channel)">{{channel.name}}</label> </div><ul ng-if="channel.childs"> <li ng-repeat="channel in channel.childs" wizdom-include="'channelTree'"></li></ul> </script> </div><div class="container-fluid" ng-show="mode=='secondScene'"> <div id="secondpan"><div wizdom-include="templateUrl"></div></div></div><div ng-show="mode=='nodata'"> <div class="alert alert-warning" role="alert">{{'To create elements you need to have at least one channel and related content type' | translate}}</div></div></div><div class="modal-footer bootstrap-wrapper" ng-show="mode=='firstScene' || mode=='secondScene'" > <div class="noticeboard-modal-actions"> <div> <button type="submit" ng-if="mode=='secondScene'" class="button primary xsmall" ng-click="save()" ng-disabled="form.$invalid" >{{'Publish' | translate}}</button> <button type="button" ng-if="mode=='secondScene'" class="button secondary xsmall" ng-click="back()" >{{'Back' | translate}}</button> <button type="submit" ng-if="mode=='firstScene'" class="button primary xsmall" ng-click="next();" ng-disabled="selectedchannels.length==0" >{{'Next' | translate}}</button> <button type="submit" ng-if="mode=='firstScene'" class="button secondary xsmall" ng-click="cancel();" >{{'Cancel' | translate}}</button> </div><div> <button type="submit" ng-if="editItem !=null" ng-show="mode=='firstScene' || mode=='secondScene'" class="button secondary xsmall" ng-click="deleteNewsItem(editItem.id)" >{{'Delete' | translate}}</button> <button type="submit" ng-if="mode=='secondScene'" class="button secondary xsmall" ng-click="cancel();" >{{'Cancel' | translate}}</button> </div></div></div></div></div>`,
+      );
+      $templateCache.put(
+        "Noticeboard/Templates/Dialogs/DanskeEditNoticeboardFeed.html",
+        `<div class="db-wrapper"> <div class="noticeboard-modal"> <div class="modal-header bootstrap-wrapper"> <button type="button" class="close closebtn" data-ng-click="cancel()" aria-hidden="true" > &times; </button> <h3 class="modal-title">{{'Edit feed' | translate}}</h3> </div><div class="modal-body bootstrap-wrapper"> <h4 class="content-header-1">{{'Select feed(s)' | translate}}</h4> <div ng-show="loading" class="container-fluid"> <div class="spinner"></div></div><div ng-show="!loading"> <div class="alert alert-warning" role="alert" ng-if="availableChannels.length==0" >{{'You do not have any assigned channels' | translate}}</div><div ng-show="channelsTree.length > 0"> <div class="channel-tree-root" ng-repeat="channelTree in channelsTree" > <div ng-repeat="firstChild in channelTree.childs"> <h5 class="pointer" ng-click="firstChild.show=!firstChild.show">{{firstChild.name}} ({{firstChild.selectedChannelsCount}})<span class="pull-right ms-Icon" ng-class="{'ms-Icon--ChevronUp': firstChild.show, 'ms-Icon--ChevronDown': !firstChild.show}" ></span> </h5> <div ng-show="firstChild.show" class="channel-items"> <ul class="channel-tree"> <li> <div class="channel-item db-control"> <input class="input-checkbox" type="checkbox" ng-checked="firstChild.selectedChannelsCount !==0"/> <label ng-class="{'indeterminate': firstChild.allChildrenCount - firstChild.selectedChannelsCount !==firstChild.disabledChannelsCount}" ng-click="selectParentChannel(firstChild, (firstChild.allChildrenCount - firstChild.selectedChannelsCount !==firstChild.disabledChannelsCount ? true : false), true)" > All </label> </div></li><li ng-repeat="channel in firstChild.childs" wizdom-include="'channelTree'" ></li></ul> </div></div></div></div><script type="text/ng-template" id="channelTree"> <div class="channel-item db-control"> <input class="input-checkbox" type="checkbox" ng-model="channel.item.isPersonalSelectedForCurrentUser" ng-disabled="!channel.enabled && !channel.item.isMandatoryForCurrentUser ? false : !channel.enabled || channel.item.isMandatoryForCurrentUser" ng-checked="!channel.enabled && !channel.item.isMandatoryForCurrentUser ? channel.selectedChannelsCount !==0 : channel.item.isMandatoryForCurrentUser || channel.item.isSuggestedForCurrentUser || channel.item.isPersonalSelectedForCurrentUser" > <label ng-class="{'indeterminate': !channel.enabled && !channel.item.isMandatoryForCurrentUser ? channel.allChildrenCount !==channel.selectedChannelsCount : false}" ng-click="!channel.enabled && !channel.item.isMandatoryForCurrentUser ? selectParentChannel(channel, (channel.allChildrenCount - channel.selectedChannelsCount !==channel.disabledChannelsCount ? true : false), true) : selectChannel(channel)">{{channel.name}}</label> </div><ul ng-if="channel.childs && channel.childs.length > 0"> <li ng-repeat="channel in channel.childs" wizdom-include="'channelTree'"></li></ul> </script> </div></div><div class="modal-footer bootstrap-wrapper"> <div class="noticeboard-modal-actions"> <div> <button type="button" class="button primary xsmall" ng-click="save()">{{'Save' | translate}}</button> <button type="button" class="button secondary xsmall" ng-click="cancel()" >{{'Cancel' | translate}}</button> </div></div></div></div></div>`,
+      );
+      $templateCache.put(
+        "Noticeboard/Templates/Dialogs/EditWebpart.html",
+        `<style>@media all and (min-width: 768px){.modal-dialog{width: 700px;}}.channelPanel{margin-top: 10px;}.channelRowContent .channel{border-bottom: 1px solid #cccccc;}.channelRowContent > .noBorder{border-bottom: 0;}.channelRow{padding-left: 15px;}.channelName{color: #0072c6; font-weight: normal; cursor: pointer;}.channelRowContent .glyphicon, .channelRowContent .glyphicons{margin-left: 10px; position: relative; top: 2px; cursor: default; color: #999; vertical-align: auto;}.channelRowContent .glyphicon-menu-up{cursor: pointer;}.channelRowContent .glyphicons-exclamation-sign{font-size: 12px; top: 4px;}.channelRowContent .glyphicons-pin-flag{-ms-transform: rotate(315deg); -webkit-transform: rotate(315deg); transform: rotate(315deg); margin-left: 7px; font-size: 10px; top: 5px;}</style><script type="text/ng-template" id="treeNode"> <div class="channelRowContent"> <div ng-click='selectChannel(channel);' class='channel' ng-class="{selected:(selectedChannel && selectedChannel.id==channel.id), noBorder:selectedChannel && selectedChannel.id==channel.id && channel.expandSelectedChannel, notvisible:!(channel.isVisibleInCurrentView || channel.childIsVisible || channel.isVisibleInContext)}"> <span class="channelName pointer" ng-click="channel.expandSelectedChannel=!channel.expandSelectedChannel">{{::channel.name}}</span> <i class="glyphicon glyphicon-eye-open" ng-if="channel.isVisibleInCurrentView" title="{{'Display this channel (including all parents)' | translate}}"></i> <i class="glyphicons glyphicons-exclamation-sign" ng-if="channel.mandatoryPrincipals.length>0" title="{{'Mandatory' | translate}}"></i> <i class="glyphicons glyphicons-pin-flag" ng-if="channel.suggestedPrincipals.length>0" title="{{'Suggested' | translate}}"></i><!-- <i ng-show='channel.isVisibleInCurrentView'>Begrænset visning</i> <i ng-show='channel.childIsVisible && limitedVisibility && !channel.isVisibleInCurrentView'> Parent </i> <i ng-show='!channel.isVisibleInCurrentView && channel.isVisibleInContext && channel.mandatoryPrincipals.length>0'> Mandatory </i> <i ng-show='!channel.isVisibleInCurrentView && channel.isVisibleInContext && channel.suggestedPrincipals.length>0'> Suggested </i> --> </div><div ng-if="mode=='editChannelSet'"> <div class="panel panel-default panel channelPanel" ng-if="selectedChannel && selectedChannel.id==channel.id" ng-show="channel.expandSelectedChannel"> <div class="panel-heading">{{'Properties for channel' | translate}}: <b>{{::selectedChannel.name}}</b></div><div class="panel-body">{{'Display this channel (including all parents)' | translate}}<input type="checkbox" ng-model="selectedChannel.selectedChannelIsVisible" ng-change="setChannelVisibility();"/><br/> <br/> <b>{{'Mandatory for' | translate}}:</b> <div class="radio"> <label><input type="radio" name="mandatoryFor" ng-model="selectedChannel.mandatoryFor" ng-value="'none'" ng-change="changeMandatoryFor()">{{'None' | translate}}</label> </div><div class="radio"> <label><input type="radio" name="mandatoryFor" ng-model="selectedChannel.mandatoryFor" ng-value="'everybody'" ng-change="changeMandatoryFor()">{{'Everybody' | translate}}</label> </div><div class="radio"> <label><input type="radio" name="mandatoryFor" ng-model="selectedChannel.mandatoryFor" ng-value="'selected'" ng-change="changeMandatoryFor()">{{'Selected' | translate}}</label> </div><div ng-repeat="principal in selectedChannel.mandatoryPrincipals" ng-show="selectedChannel.mandatoryFor=='selected'">{{(principal.category? '('+principal.category+') ':'')}}{{::principal.displayName}}<span ng-if="principal.loginName">&nbsp;&lt;{{principal.loginName}}&gt;</span> <b class="text-danger pointer" ng-click="removeMandatory(principal);">{{'Remove' | translate}}</b> </div><input type="text" ng-disabled="selectedChannel.mandatoryFor !='selected'" ng-model="mandatoryPrincipalSearchTerm" placeholder="{{'Add group or person' | translate}}" typeahead-on-select="addMandatoryPrincipal($model);" typeahead="user as (user.category? '('+user.category+') ':'')+user.displayName + (user.loginName ? ' - ' + user.loginName : '') for user in searchForPrincipal($viewValue,true) | limitTo:10" typeahead-loading="loadingLocations" class="form-control" typeahead-min-length="2"> <i ng-show="loadingLocations" class="glyphicon glyphicon-refresh"></i> <br/> <b>{{'Suggested for' | translate}}:</b> <div class="radio"> <label><input type="radio" name="suggestedFor" ng-model="selectedChannel.suggestedFor" ng-value="'none'" ng-change="changeSuggestedFor()">{{'None' | translate}}</label> </div><div class="radio"> <label><input type="radio" name="suggestedFor" ng-model="selectedChannel.suggestedFor" ng-value="'everybody'" ng-change="changeSuggestedFor()">{{'Everybody' | translate}}</label> </div><div class="radio"> <label><input type="radio" name="suggestedFor" ng-model="selectedChannel.suggestedFor" ng-value="'selected'" ng-change="changeSuggestedFor()">{{'Selected' | translate}}</label> </div><div ng-repeat="principal in selectedChannel.suggestedPrincipals" ng-show="selectedChannel.suggestedFor=='selected'">{{(principal.category? '('+principal.category+') ':'')}}{{::principal.displayName}}<span ng-if="principal.loginName">&nbsp;&lt;{{principal.loginName}}&gt;</span> <b class="text-danger pointer" ng-click="removeSuggested(principal);">{{'Remove' | translate}}</b> </div><input type="text" ng-disabled="selectedChannel.suggestedFor !='selected'" ng-model="suggestedPrincipalSearchTerm" placeholder="{{'Add group or person' | translate}}" typeahead-on-select="addSuggestedPrincipal($model);" typeahead="user as (user.category? '('+user.category+') ':'')+user.displayName + (user.loginName ? ' - ' + user.loginName : '') for user in searchForPrincipal($viewValue,true) | limitTo:10" typeahead-loading="loadingsuggestedPrincipals" class="form-control" typeahead-min-length="2"> <i ng-show="loadingsuggestedPrincipals" class="glyphicon glyphicon-refresh"></i> </div></div></div><div class='channelRow' ng-repeat="channel in channel.childs" wizdom-include="::'treeNode'"></div></div></script><div class="modal-header"> <button type="button" class="close closebtn" data-ng-click="cancel()" aria-hidden="true" > &times; </button> <h1 class="modal-title">{{'Noticeboard' | translate}}</h1></div><div class="modal-body"> <div class="row"> <div ng-show="mode !='firstRun' && mode !='loading'" class="col-sm-12" > <ul class="nav nav-tabs"> <li role="presentation" ng-class="{active: isActive('editview')}"> <a href="" ng-click="changeView('editview')" >{{'View properties' | translate}}</a > </li><li role="presentation" ng-class="{active: isActive('editChannelSet')}" > <a href="" ng-click="changeView('editChannelSet')" >{{'Channelset properties' | translate}}</a > </li><li role="presentation" ng-class="{active: isActive('selectChannelSet')}" > <a href="" ng-click="changeView('selectChannelSet')" >{{'Edit channelset' | translate}}</a > </li></ul> </div></div><div class="row"> <div class="col-sm-12"> <div ng-show="mode=='loading'"> <div class="row"> <div class="col-sm-12">{{'loading' | translate}}</div></div></div><div ng-if="mode=='editview'"> <div ng-controller="Wizdom365NoticeboardEditViewPropertiesController"> <div class="row"> <div class="col-sm-12"> <form role="form"> <div class="property-group"> <label class="group-label">Common</label> <div class="form-group"> <label>{{'Title' | translate}}</label> <input type="text" class="form-control" ng-model="view.extendedProperties.title" ng-change="saveView();"/> </div></div><div class="property-group"> <label class="group-label" >{{'Visibility of news items' | translate}}</label > <div class="form-group"> <label>{{'Default item selection' | translate}}</label> <select class="form-control" ng-model="view.extendedProperties.defaultSelection" ng-change="saveView();" > <option value="Mine">{{'Show my' | translate}}</option> <option value="Unread" >{{'Show unread' | translate}}</option > <option value="All">{{'Show all' | translate}}</option> </select> </div><div class="form-group"> <label>{{'Items per page' | translate}}</label> <select class="form-control" ng-model="view.extendedProperties.itemsPerPage" ng-options="op as op for op in itemsPerPagePosVal" ng-change="saveView();" ></select> </div><div class="form-group"> <label>{{'Max number of pages' | translate}}</label> <select class="form-control" ng-model="view.extendedProperties.maxNumberOfPages" ng-options="op as op for op in maxNumberOfPagesPosVal" ng-change="saveView();" ></select> </div></div><div class="property-group"> <label class="group-label">Toolbar</label> <div class="form-group"> <div class="checkbox"> <label> <input type="checkbox" ng-model="view.extendedProperties.hideToolbar" ng-change="saveView();"/>{{'Hide the toolbar' | translate}}</label> </div></div></div><div class="property-group"> <label class="group-label" >{{'Choose Templates' | translate}}</label > <div class="form-group"> <label>{{'Overview template' | translate}}</label> <select class="form-control" ng-options="template for template in templates" ng-model="view.extendedProperties.overviewTemplate" ng-change="saveView();" ></select> </div><div class="form-group"> <label>{{'Show item template' | translate}}</label> <select class="form-control" ng-options="template for template in itemtemplates" ng-model="view.extendedProperties.showItemTemplate" ng-change="saveView();" ></select> </div><div class="form-group"> <label >{{'Create and edit template (News)' | translate}}</label > <select class="form-control" ng-options="template for template in createedittemplates" ng-model="view.extendedProperties.createEditNewsTemplate" ng-change="saveView();" ></select> </div><div class="form-group"> <label >{{'Create and edit template (Video)' | translate}}</label > <select class="form-control" ng-options="template for template in createedittemplates" ng-model="view.extendedProperties.createEditVideoTemplate" ng-change="saveView();" ></select> </div><div class="form-group"> <label>{{'Social summary template' | translate}}</label> <select class="form-control" ng-options="template for template in socialSummaryTemplates" ng-model="view.extendedProperties.socialSummaryTemplate" ng-change="saveView();" ></select> </div><div class="form-group"> <label>{{'Social comments template' | translate}}</label> <select class="form-control" ng-options="template for template in socialCommentsTemplates" ng-model="view.extendedProperties.socialCommentsTemplate" ng-change="saveView();" ></select> </div></div><div class="property-group"> <label class="group-label">Noticeboard Archive</label> <div class="form-group"> <label>{{'Archive link title' | translate}}</label> <input type="text" class="form-control" ng-model="view.extendedProperties.archiveLinkTitle" ng-change="saveView();"/> </div><div class="form-group"> <label>{{'Archive link url' | translate}}</label> <input type="text" class="form-control" ng-model="view.extendedProperties.archiveUrl" ng-change="saveView();"/> </div></div></form> </div></div></div></div><div class="tab-channelset" ng-if="mode=='selectChannelSet' || mode=='firstRun'" > <div class="row"> <div class="col-sm-12"> <div class="tab-header-section"> <div class="tab-header no-margin">{{'Local or shared channel set' | translate}}</div><span >{{'Choose whether you wish to use a shared channel set or a local channel set.' | translate}}</span > </div></div></div><div class="row"> <div class="col-sm-6"> <div class="panel panel-default"> <div class="panel-heading">{{'Shared channelset' | translate}}</div><div class="panel-body"> <div class="input-group"> <select ng-model="sharedChannelSet" class="form-control ddl" ng-options="sharedChannelSet.id as sharedChannelSet.name for sharedChannelSet in sharedChannelSets" ></select> <span class="input-group-btn"> <button class="btn" style="border: 1px solid #ccc;" ng-click="createNewView(sharedChannelSet);" >{{'Apply' | translate}}</button> </span> </div><p class="help-text" ng-bind-html="'If you choose the shared channel set, you will select one of the channel sets you have set up in Wizdom Configuration Center. If you edit a shared channel set, it will change in all Noticeboard web parts where the channel set is used.<br/><br/>Note that only administrators can change a shared channel set.' | translate" ></p></div></div></div><div class="col-sm-6"> <div class="panel panel-default"> <div class="panel-heading">{{'Local channelset' | translate}}</div><div class="panel-body"> <button class="btn btn-primary" ng-click="createNewView();">{{'Create' | translate}}</button> <p class="help-text">{{'If you choose a local channel set, you will configure it on a specific noticeboard web part and it will therefore only apply to this specific web part.' | translate}}</p></div></div></div></div></div><div ng-if="mode=='editChannelSet'"> <div ng-controller="Wizdom365NoticeboardEditChannelSetController"> <div class="alert alert-warning" role="alert" ng-show="view.isSharedChannelSet && view.editableByCurrentUser" >{{'This is a shared channelset. Changes might affect other views' | translate}}</div><div class="alert alert-danger" role="alert" ng-show="view.isSharedChannelSet && !view.editableByCurrentUser" >{{'This is a shared channelset. Only administrators can change modify shared channelsets' | translate}}</div><div class="row"> <div class="col-sm-12"> <div class="tab-header-section"> <div class="tab-header">{{'Click on a channel to change its properties' | translate}}</div></div><div ng-repeat="channel in channels" wizdom-include="'treeNode'" class="channelRepeater" ></div></div></div></div></div></div></div></div><div class="modal-footer"> <button class="btn btn-default wiz-btn-padding" ng-click="close();">{{'Close' | translate}}</button></div>`,
+      );
+      $templateCache.put(
+        "ImageSlider/Templates/Dialogs/EditWebpart.html",
+        `<div class="modal-header"> <button type="button" class="close closebtn" data-ng-click="cancel()" aria-hidden="true" > &times; </button> <h1 class="modal-title">{{'Image slider' | translate}}</h1></div><div class="modal-body"> <form> <div class="container-fluid"> <div class="row"> <div class="col-sm-12"> <div class="form-group"> <label class="control-label">{{'Template' | translate}}</label> <wizdom365-template-picker template-url="data.templateUrl" directory-path="ImageSlider/Templates/ViewTemplates" ></wizdom365-template-picker> </div><div class="row"> <div class="form-group col-sm-9"> <label for="webUrl" class="control-label" >{{'Site of picture library' | translate}}</label > <input class="form-control" id="webUrl" type="text" ng-model="data.webUrl" ng-disabled="true"/> <p class="wt-fieldInfo">{{"Choose the site of your picture library" | translate}}</p></div><div class="form-group col-sm-3"> <label class="control-label">&nbsp;</label> <button class="form-control btn btn-default" ng-click="chooseSpSite('webUrl');" >{{'Browse...' | translate}}</button> </div></div><div class="row"> <div class="form-group col-sm-9"> <label for="folderUrl" class="control-label" >{{'Picture library' | translate}}</label > <input class="form-control" id="folderUrl" type="text" ng-model="data.folderUrl" ng-disabled="true"/> <p class="wt-fieldInfo">{{"Choose your picture library" | translate}}</p></div><div class="form-group col-sm-3"> <label class="control-label">&nbsp;</label> <button class="form-control btn btn-default" ng-click="chooseSpSite('folderUrl');" >{{'Browse...' | translate}}</button> </div></div></div></div><div class="row"> <div class="col-sm-12"> <div class="form-group"> <label for="orderBy" class="control-label" >{{"Sort by" | translate}}</label > <select class="form-control" ng-model="data.orderBy"> <option value="">{{"Select" | translate}}</option> <option ng-repeat="fieldName in fieldNames track by $index" >{{fieldName}}</option > </select> </div></div></div><div class="row hide"> <div class="col-sm-12"> <div class="form-group" ng-init="data.rowLimit=10000"> <label for="rowLimit" class="control-label" >{{"Max number of images" | translate}}</label > <input type="number" id="rowLimit" class="form-control" ng-model="data.rowLimit"/> </div></div></div></div></form></div><div class="modal-footer bootstrap-wrapper"> <button class="btn btn-success wiz-btn-padding" ng-click="updateConfig();">{{"Ok" | translate}}</button> <button class="btn btn-default wiz-btn-padding" ng-disabled="loading" ng-click="cancel();" >{{"Cancel" | translate}}</button></div>`,
+      );
+      $templateCache.put(
+        "Gamification/Templates/Fields/radio.html",
+        `<label class="db-poll-question-title"><span ng-show="field.required">*</span>{{field.title}}</label><span class="subfieldpoint" ng-show="quizType==2">{{'There is' | translate}} {{field.point}} {{'point for a correct answer'| translate}}</span><div><div class="db-poll-input db-control radio" ng-repeat="option in field.options"> <input class="input-radio" type="radio" name="{{field.id}}" id="{{field.id + '_'+ $index}}" ng-value="option.value.toString()" ng-model="$parent.field.value"/><label for="{{field.id + '_'+ $index}}"><span class="radio"></span><span class="value" ng-bind="option.title"></span></label></div></div>`,
+      );
+      $templateCache.put(
+        "Gamification/Templates/Fields/dropdown.html",
+        `<div><label class="db-poll-question-title"><span ng-show="field.required">*</span>{{field.title}}</label><span class="subfieldpoint" ng-show="quizType==2">{{'There is' | translate}} {{field.point}} {{'point for a correct answer' | translate}}</span><div class="db-control"><select class="db-poll-select" ng-model="field.value" ng-options="option.value as option.title for option in field.options" ng-required="field.required" ng-init="field.value=field.options[field.value].value || field.options[0].value"></select></div></div>`,
+      );
+      $templateCache.put(
+        "Poll/Templates/Dialogs/CreatePoll.html",
+        `<div class="modal-header"> <button type="button" class="close closebtn" data-ng-click="cancel()" aria-hidden="true" > &times; </button> <h1 class="modal-title">{{'Create or edit poll' | translate}}</h1></div><div class="modal-body"> <div wizdom365-spinner="" loading="loading"></div><div ng-hide="loading"> <div ng-hide="poll.isAdmin">{{'You are not an admin on this poll' | translate}}</div><form ng-show="poll.isAdmin"> <div class="container-fluid"> <div class="row"> <div wizdom365-spinner="" loading="loading"></div><div class="col-sm-12" ng-hide="loading"> <div class="form-group"> <label class="control-label">{{'Title' | translate}}</label> <input type="text" name="title" class="form-control" data-ng-model="poll.title" required/> </div><div class="form-group"> <div class="checkbox"> <label> <input type="checkbox" ng-model="poll.closed"/>{{'Closed' | translate}}</label> </div><div class="checkbox"> <label> <input type="checkbox" ng-model="poll.isAnonymous"/>{{'Is anonymous' | translate}}</label> </div><div class="checkbox"> <label> <input type="checkbox" ng-model="poll.canEdit"/>{{'Can response be edited' | translate}}</label> </div><div class="checkbox"> <label> <input type="checkbox" ng-model="poll.showOverview"/>{{'Can users see all responses' | translate}}</label> </div><div class="checkbox"> <label> <input type="checkbox" ng-model="poll.seeResultBeforeAnswer" ng-disabled="!poll.showOverview"/>{{'See result before answering' | translate}}</label> </div></div><div class="form-group"> <label class="control-label" >{{'Target groups' | translate}}</label > <div wizdom365-principalpicker principals="poll.groups" allowwizdomgroups="true" class="principal-picker" ></div></div><div class="form-group"> <label class="control-label" >{{'Administrators' | translate}}</label > <div wizdom365-principalpicker principals="poll.admins" allowwizdomgroups="true" class="principal-picker" ></div></div><div class="form-group"> <label class="control-label" >{{'After submit text' | translate}}</label > <textarea class="form-control" ng-attr-placeholder="{{'Text to be displayed after answering the poll' | translate}}" data-ng-model="poll.description" style="height: 156px;" ui-tinymce="tinyMceOptions" toolbar-configuration="Webform" ></textarea> </div><div class="form-group"> <label class="control-label">{{'Fields' | translate}}</label> <select ng-model="addfield.new" class="form-control"> <option value="">{{'Select field type' | translate}}</option> <option value="radio">{{'radio' | translate}}</option> <option value="dropdown">{{'dropdown' | translate}}</option> <option value="checkbox">{{'checkbox' | translate}}</option> </select> <p class="wt-fieldInfo">{{'Choose how your added fields should be shown' | translate}}</p></div><div class="form-group"> <button class="btn btn-primary" type="button" ng-click="addNewField();" ng-disabled="!addfield.new" >{{'Add Field' | translate}}</button> </div><div ng-show="poll.fields.length"> <accordion close-others="true"> <accordion-group ng-repeat="field in poll.fields track by $index" is-open="panelExpanded" > <accordion-heading class="panel-title">{{field.title}}<i class="pull-right ms-Icon" ng-class="{'ms-Icon--ChevronDown': panelExpanded, 'ms-Icon--ChevronRight': !panelExpanded}" ></i> </accordion-heading> <div class="form-group" style="overflow: hidden;"> <div class="col-sm-6" style="padding-left: 0;"> <label class="control-label" >{{'Field type' | translate}}:</label > <p>{{field.type | translate}}</p></div><div class="col-sm-6 text-right" style="padding-right: 0;"> <button class="btn btn-default" type="button" ng-click="deleteField($index)" > <span class="glyphicon glyphicon-trash"></span>{{'Delete' | translate}}</button> </div></div><hr/> <div class="form-group"> <label class="control-label" >{{'Title' | translate}}:</label > <input class="form-control" type="text" ng-model="field.title" value="{{field.title}}"/> </div><div class="form-group"> <label class="control-label" >{{'Required' | translate}}:</label > <div class="radio"> <label> <input type="radio" ng-value="true" ng-selected ng-model="field.required"/>{{'Yes' | translate}}</label> </div><div class="radio"> <label> <input type="radio" ng-value="false" ng-model="field.required"/>{{'No' | translate}}</label> </div></div><div class="form-group" ng-show="showAddOptions(field)"> <label class="control-label" style="width: 100%;" >{{'Options' | translate}}:</label > <form class="form-horizontal" role="form" ng-model="field.options" > <div class="form-group" style="margin-bottom: 5px; min-height: auto;" ng-repeat="option in field.options" > <input type="hidden" ng-value="option.value=$index"/> <table style="width: 100%;"> <tr> <td> <input class="form-control" type="text" ng-model="option.title" placeholder="{{'Option' | translate}}"/> </td><td style="padding-left: 15px;"> <a class="btn btn-default btn-mini btn-block" ng-click="deleteOption(field, $index)" ><span class="glyphicon glyphicon-minus"></span ></a> </td></tr></table> </div></form> <button class="btn btn-primary btn-small" type="button" ng-click="addOption(field)" >{{'Add option' | translate}}</button> </div></accordion-group> </accordion> </div></div></div></div></form> </div></div><div class="modal-footer" ng-show="!loading && poll.isAdmin"> <button class="btn btn-primary wiz-btn-padding" ng-disabled="'' + poll.title==''" ng-click="saveQuiz()" >{{'Save' | translate}}</button> <button type="button" class="btn btn-default wiz-btn-padding" data-ng-if="poll.id > 0" data-ng-click="deletePoll()" >{{'Delete' | translate}}</button></div>`,
+      );
+    },
+  ]);
+})();
+/* eslint-disable no-undef */
+/* eslint-disable no-empty */
+(function () {
+  try {
+    angular.module("Wizdom365.Branding").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365PagetagsDirective", [
+          "$delegate",
+          function ($delegate) {
+            let directive = $delegate[0];
+            directive.template = `
+                <div class='col-sm-6 manualpagetags' ng-if='::(showPageInfo && pageTerms && pageTerms.length > 0)'>
+                <small>
+                <span class="text-muted">{{ 'Tags' | translate }}</span>
+                <div class="manualtags">
+                <span role='presentation' ng-repeat='termname in ::pageTerms'>
+                <span class="page-tag" title='{{ ::termname }}'>{{ ::termname }}</span>
+                <span ng-if="!$last"> - </span>
+                </span>
+                </small>
+                </div>
+                </div>`;
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();
+(function () {
+  try {
+    angular.module("Wizdom365").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365DatetimePickerDirective", [
+          "$delegate",
+          function ($delegate) {
+            const directive = $delegate[0];
+            directive.template = `<table style="width: 100%; padding: 0;" ng-style="tableStyle" class="dateTimePicker" ng-class="{'ng-invalid': (required && (date==null || date==undefined))}"><tr><td ng-show="{{showDatePicker}}"><div class="input-group date-input"><div class="date-input-placeholder" ng-click="open($event)"></div><input type="text" ng-disabled="true" class="form-control" min-date="min" datepicker-popup="{{format}}" ng-model="date" is-open="opened" datepicker-options="options" date-disabled="disabled(date, mode)" ng-required="required" close-text="{{'Close' | translate}}" clear-text="{{'Clear' | translate}}" current-text="{{'Today' | translate}}"> <span class="input-group-btn"><button type="button" class="btn btn-default"><i class="glyphicon glyphicon-calendar"></i></button></span></div></td><td ng-show="{{showDatePicker && showTimePicker}}">&nbsp;</td><td ng-show="{{showTimePicker}}" class="timePicker"><timepicker ng-model="date" hour-step="1" minute-step="15" show-meridian="false"></timepicker></td></tr></table>`;
+
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();
+(function () {
+  try {
+    angular.module("Wizdom365").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365ItemSocialContainerDirective", [
+          "$delegate",
+          "contextInfo",
+          function ($delegate, contextInfo) {
+            const directive = $delegate[0];
+
+            directive.compile = function () {
+              return function (scope) {
+                scope.$watch("item.likes.length", () => {
+                  if (!scope.item) return;
+
+                  const index = (scope.item.likes || []).findIndex(
+                    (like) => like.principal.loginName.toLowerCase() === contextInfo.userLoginName.toLowerCase(),
+                  );
+
+                  if (index !== -1) {
+                    scope.liked = true;
+                  } else {
+                    scope.liked = false;
+                  }
+                });
+              };
+            };
+
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();
+(function () {
+  try {
+    angular.module("Wizdom365").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365ItemSocialContainerDirective", [
+          "$delegate",
+          "contextInfo",
+          function ($delegate, contextInfo) {
+            const directive = $delegate[0];
+
+            directive.compile = function () {
+              return function (scope) {
+                scope.$watch("item.likes.length", () => {
+                  if (!scope.item) return;
+
+                  const index = (scope.item.likes || []).findIndex(
+                    (like) => like.principal.loginName.toLowerCase() === contextInfo.userLoginName.toLowerCase(),
+                  );
+
+                  if (index !== -1) {
+                    scope.liked = true;
+                  } else {
+                    scope.liked = false;
+                  }
+                });
+              };
+            };
+
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();
+/* eslint-disable no-empty */
+/* eslint-disable no-undef */
+(function () {
+  try {
+    angular.module("Wizdom365.Manual").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365PagetagsDirective", [
+          "$delegate",
+          function ($delegate) {
+            let directive = $delegate[0];
+            directive.template = `
+                <div class='col-sm-6 manualpagetags' ng-if='::(showPageInfo && pageTerms && pageTerms.length > 0)'>
+                <small>
+                <span class="text-muted">{{ 'Tags' | translate }}</span>
+                <div class="manualtags">
+                <span role='presentation' ng-repeat='termname in ::pageTerms'>
+                <span class="page-tag"> {{ ::termname }}</span>
+                <span ng-if="!$last"> - </span>
+                </span>
+                </small>
+                </div>
+                </div>`;
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();
+
+(function () {
+  try {
+    angular.module("Wizdom365.Manual").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365PageresponsibleDirective", [
+          "$delegate",
+          function ($delegate) {
+            let directive = $delegate[0];
+            directive.template = `<div class="col-sm-6 manualpageresponsible"
+                    ng-if="showPageresponsible && (pageResponsible.primaryWizdomUser || pageResponsible.secondaryWizdomUser)">
+                    <small>
+                        <span class="text-muted">{{ "Responsible for content" | translate }}</span>
+                        <div ng-if="pageResponsible.primaryWizdomUser" class="primaryWizdomUser">
+                            <a class="page-responsible" href="{{ pageResponsible.primaryWizdomUser.publicUrl }}">
+                                <strong>{{ pageResponsible.primaryWizdomUser.name }}</strong></a>
+                            - <a class="responsible-email"
+                                href="mailto:{{ pageResponsible.primaryWizdomUser.email }}">{{ pageResponsible.primaryWizdomUser.email }}</a>
+                        </div>
+                        <div ng-if="pageResponsible.secondaryWizdomUser">
+                            <a class="page-responsible" href="{{ pageResponsible.secondaryWizdomUser.publicUrl }}">
+                                <strong>{{ pageResponsible.secondaryWizdomUser.name }}</strong></a>
+                            - <a class="responsible-email"
+                                href="mailto:{{ pageResponsible.secondaryWizdomUser.email }}">{{ pageResponsible.secondaryWizdomUser.email }}</a>
+                        </div>
+                    </small>
+                </div>`;
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {
+    let isLoaded = true;
+    if (/No module/.test(e) || e.message.indexOf("$injector:nomod") > -1) {
+      isLoaded = false;
+    }
+  }
+})();
+//Mega menu open on click
+(function () {
+
+    angular.module("Wizdom365.Megamenu").config(['$provide', function ($provide) {
+        $provide.decorator('wizdom365MegamenuDesktopDirective', ['$delegate', function ($delegate) {
+            
+            const subMenuControls = () => {
+                var _currentId = void 0;
+                function open(subMenuId) {
+                   change(subMenuId)
+                }
+                
+                function change (id) {
+                    $("#s4-workspace").addClass("no-scroll")
+                    $('.Megamenu').addClass('sub-open');
+                    _currentId = id;
+                }
+                function close() {
+                    _currentId = null;
+                    $("#s4-workspace").removeClass("no-scroll")
+                }
+                
+                return {
+                    open: open,
+                    close: close,
+                    change: change,
+                    currentId: function currentId () {
+                        return _currentId;
+                    }
+                }
+                
+            }
+            
+            let subMenu = subMenuControls()
+          
+            let directive = $delegate[0];
+            let ctrl = directive.controller
+            
+            function getCurrentParent () {
+                var currentURL = new URL(window.location.href);
+                var currentParent = currentURL.origin + "/" + currentURL.pathname.split("/")[1];
+                
+                return currentParent;
+                
+            }
+            
+            ctrl.prototype.currentParent = getCurrentParent();
+            
+            function onMainMenuItemClick (id) {
+                if (id) {
+                    changeSubMenu(id)
+                }
+            }
+            
+            function closeSubMenu () {
+                if(!subMenu.currentId()) return;
+                subMenu.close();
+                $('.Megamenu').removeClass('sub-open');
+                coverOut();
+            }
+            
+            function changeSubMenu (id) {
+                if(!subMenu.currentId()) {
+                    subMenu.open(id);
+                    coverIn();
+                } else if (subMenu.currentId() === id) {
+                    closeSubMenu();
+                } else if (subMenu.currentId() !== id ) {
+                    subMenu.change(id);
+                }
+            }
+            
+            function coverIn() {
+                $('#s4-workspace').addClass('sub-open');
+            }
+        
+            function coverOut() {
+                 $('#s4-workspace').removeClass('sub-open');
+            }
+
+            // $(".cover").click(function(){closeSubMenu();})
+            
+            // $(window).on("resize", calcSize);
+        
+            ctrl.prototype.clickToOpen = function (item, index) {
+                
+                var p = this;
+                
+                if (item.children.length > 0) {
+                     
+                    if (p.currentId === index) {
+                        p.currentId = null;
+                    } else {
+                        p.currentId = index;
+                    }
+                   
+                    if (!p.fullWidth) {
+                        p.setPositionOnContainer(item);
+                    }
+                    
+                    onMainMenuItemClick(index)
+                }
+            }
+            ctrl.prototype.clickToClose = function () {
+                this.currentId = null;
+                closeSubMenu()
+            }
+            return $delegate;
+        }])
+    }])
+})();(function () {
+  try {
+    angular.module("Wizdom365.PageInfo").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365NewsinfoDirective", [
+          "$delegate",
+          "danskePageInfo",
+          function ($delegate, danskePageInfo) {
+            const directive = $delegate[0];
+            const link = directive.link;
+        
+            directive.compile = function () {
+              return function (scope, element, attrs) {
+               link.apply(this, arguments);
+               scope.pageInfo.danske = danskePageInfo
+              };
+            };
+
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+  
+   angular.module("Wizdom365.PageInfo").filter('split', function() {
+        return function(input, splitChar, splitIndex) {
+            return input.split(splitChar)[splitIndex];
+        }
+    });
+  
+
+    function danskePageInfoService() {
+
+        var t = {
+            imageApiUrl: "https://mail.danskebank.com/ews/Exchange.asmx/s/GetUserPhoto?email=",
+            imageSize: "&HR64x64",
+            profileUrl: "/Pages/user.aspx#userid=",
+        };
+        return t;
+    }
+    angular.module("Wizdom365.PageInfo").factory("danskePageInfo", danskePageInfoService);
+    danskePageInfoService.$inject = [];
+})();
+(function () {
+  try {
+    angular.module("Wizdom365.PersonalLink").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365EditLinklistDirective", [
+          "$delegate",
+          function ($delegate) {
+            const directive = $delegate[0];
+            directive.template = `<div class="panel panel-default"> <div class="panel-body"> <div class="link-sortable link-collection-content"> <div class="link-collection-content" ng-repeat="(catIdx, category) in vm.categoryDatasource" ng-init="categoryIcon=category.id==0 ? 'glyphicon-list-alt' : 'glyphicon-folder-close'" > <div class="link-category"> <div class="float-wrapper"> <div class="pull-left"> <a ><i class="glyphicon" ng-class="categoryIcon"></i> <span ng-if="category.name=='Uncategorized'" >{{category.name | translate}}</span > <span ng-if="category.name !='Uncategorized'" >{{category.name}}</span ></a > </div></div><div class="float-wrapper"> <div class="pull-right" style="padding: 5px 0 5px 5px; margin-right: 12px;" > <span ng-if="vm.accessOptions.isAdmin || vm.accessOptions.allowPersonalLinks" class="link-move-container" ><a ng-click="vm.accessOptions.isAdmin ? vm.addPredefinedLink(category) : vm.addPersonalLink(category)" ><i class="glyphicon glyphicon-plus-sign"></i> <span class="wt-linkText ng-binding" title="{{(vm.accessOptions.isAdmin ? 'Add predefined link' : 'Add personal link') | translate}}" >{{(vm.accessOptions.isAdmin ? 'Add predefined link' : 'Add personal link') | translate}}</span ></a ></span > <a ng-class="{'icon-hidden': category.name=='Uncategorized' || !vm.accessOptions.isAdmin}" ><i class="glyphicon glyphicon-pencil" ng-click="vm.editCategory(category)" ></i ></a> <a ng-class="{'icon-hidden': category.name=='Uncategorized' || !vm.accessOptions.isAdmin}" ><i class="glyphicon glyphicon-trash" ng-click="vm.removeCategory(category)" ></i ></a> </div></div></div><div ui-sortable="vm.sortableOptions" class="categorylinks-container" ng-model="category.links" > <div class="link-container" ng-repeat="link in category.links" ng-class="link.type===3 || vm.accessOptions.isAdmin || vm.accessOptions.allowSortLinks ? 'sortable' : 'not-sortable'" > <div class="link"> <div class="float-wrapper"> <div class="pull-left"> <span ng-if="link.type==1" class="label label-primary" >Corp</span > <i class="glyphicon glyphicon-link"></i> <span ng-bind="link.name"></span> </div></div><div ng-if="vm.accessOptions.isAdmin" class="float-wrapper"> <div class="pull-right"> <span class="link-move-container" ><a ><i class="glyphicon glyphicon-arrow-up" ng-click="vm.moveLink(link, $index, catIdx, -1)" ></i ></a> <a ><i class="glyphicon glyphicon-arrow-down" ng-click="vm.moveLink(link, $index, catIdx, 1)" ></i></a ></span> <a ><i class="glyphicon glyphicon-pencil" ng-class="{'icon-hidden': link.type===1}" ng-click="vm.editPredefinedLink(category.id, $index, link)" ></i ></a> <a ><i class="glyphicon glyphicon-trash" ng-click="vm.removeLinkAdmin($index, link)" ></i ></a> </div></div><div ng-if="!vm.accessOptions.isAdmin" class="float-wrapper"> <div class="pull-right"> <span ng-if="vm.accessOptions.allowSortLinks || link.type===3" class="link-move-container" ><a ><i class="glyphicon glyphicon-arrow-up" ng-click="vm.moveLink(link, $index, catIdx, -1)" ></i ></a> <a ><i class="glyphicon glyphicon-arrow-down" ng-click="vm.moveLink(link, $index, catIdx, 1)" ></i></a ></span> <a ><i class="glyphicon glyphicon-pencil" ng-class="{'icon-hidden': link.type !==3}" ng-click="vm.editPredefinedLink(category.id, $index, link)" ></i ></a> <a ><i class="glyphicon glyphicon-trash" ng-class="{'icon-hidden': !vm.accessOptions.allowDeleteLinks && link.type !==3}" ng-click="vm.removeLinkUser($index, link)" ></i ></a> </div></div></div></div></div></div></div></div><div class="panel-heading text-right" style="padding: 10px 25px;" ng-if="vm.accessOptions.isAdmin" > <button type="button" class="btn btn-default" ng-click="vm.createCategory()" >{{'Create Category' | translate}}</button> </div></div>`;
+
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();
+
+(function () {
+  try {
+    angular.module("Wizdom365.PersonalLink").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365PersonallinkWebpartDirective", [
+          "$delegate",
+          function ($delegate) {
+            const directive = $delegate[0];
+            const link = directive.link;
+
+            directive.compile = function () {
+              return function (scope, element, attrs) {
+                link.apply(this, arguments);
+
+                const webpartProperties = attrs.webpartProperties
+                  ? JSON.parse(attrs.webpartProperties)
+                  : null;
+                scope.vm.webpartProperties = webpartProperties;
+
+                scope.getDocumentIcon = function (url) {
+                  let documentExtension = null;
+
+                  if (isValidUrl(url)) {
+                    let index = url.lastIndexOf("/");
+                    const document = url.substring(index + 1);
+
+                    index = document.lastIndexOf(".");
+
+                    documentExtension = document.substring(index + 1);
+
+                    switch (documentExtension) {
+                      case "doc":
+                      case "docx":
+                        return "docx";
+                      case "ppt":
+                      case "pptx":
+                        return "pptx";
+                      case "pdf":
+                        return documentExtension;
+                      case "txt":
+                        return documentExtension;
+                      case "xls":
+                      case "xlsx":
+                      case "xlsm":
+                      case "csv":
+                        return "xlsx";
+                      case "mp4":
+                        return "video";
+                      default:
+                        return null;
+                    }
+                  }
+
+                  return documentExtension;
+                };
+              };
+            };
+
+            function isValidUrl(url) {
+              const pattern = new RegExp(
+                "^(https?:\\/\\/)?" +
+                  "((([a-z\\d]([a-z\\d-]*[a-z\\d])*)\\.)+[a-z]{2,}|" +
+                  "((\\d{1,3}\\.){3}\\d{1,3}))" +
+                  "(\\:\\d+)?(\\/[-a-z\\d%_.~+]*)*" +
+                  "(\\?[;&a-z\\d%_.~+=-]*)?" +
+                  "(\\#[-a-z\\d_]*)?$",
+                "i"
+              );
+
+              return !!pattern.test(url);
+            }
+
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();
+(function () {
+  try {
+    angular.module("Wizdom365.Gamification").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365GfCheckboxDirective", [
+          "$delegate",
+          function ($delegate) {
+            const directive = $delegate[0];
+            directive.template = `<label class="db-poll-question-title"><span ng-show="field.required">*</span>{{field.title}}</label><div class="db-poll-input db-control checkbox" ng-repeat="option in field.options"><input class="input-checkbox" type="checkbox" name="{{field.id}}" id="{{field.id + '_'+ $index}}" value="{{option.title}}" ng-model="option.selected"> <label for="{{field.id + '_'+ $index}}">{{option.title}}</label></div>`;
+
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();
+
+(function () {
+  try {
+    angular.module("Wizdom365.Poll").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365PollDirective", [
+          "$delegate",
+          function ($delegate) {
+            const directive = $delegate[0];
+            const link = directive.link;
+
+            directive.compile = function () {
+              return function (scope, element, attrs) {
+                link.apply(this, arguments);
+
+                const webpartProperties = attrs.webpartProperties
+                  ? JSON.parse(attrs.webpartProperties)
+                  : null;
+                scope.webpartProperties = {
+                  templateUrl:
+                    (webpartProperties && webpartProperties.templateUrl) ||
+                    "Poll/Templates/ViewTemplates/DanskePoll.html",
+                  pollId: (webpartProperties && webpartProperties.pollId) || 0,
+                };
+              };
+            };
+
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();
+/* eslint-disable no-empty */
+/* eslint-disable no-useless-escape */
+/* eslint-disable no-undef */
+(function () {
+  try {
+    angular.module("Wizdom365.Powerpanel").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365PowerpanelDirective", [
+          "$delegate",
+          function ($delegate) {
+            let directive = $delegate[0];
+
+            directive.template = `
+              <div id="powerpanel" ng-class="{\'toggled\':vm.selected}">
+                <a
+                  ng-repeat="panel in ::vm.panels | orderBy: \'sortOrder\'"
+                  ng-click="vm.handleClick(panel)"
+                  data-title="{{vm.getTranslatedText(panel, \'label\')}}"
+                  class="panel-button"
+                  ng-class="{\'selected\': vm.selected === panel}">
+                  <i class="db-icon" ng-class="::panel.label"></i>
+                  <span db-notification-badge ng-if="::panel.label === 'db-icon-bell-notification'"></span>
+                </a>
+              </div>
+              <div class="powerpanel-filler" style="width: 50px"></div>
+              <div id="powerpanel-flyout" ng-attr-status="{{ vm.selected ? \'open\' : \'closed\' }}"
+                ng-style="{ \'width\': vm.selected ? vm.selected.width : 0 }" ng-if="vm.selected" class="fade flyout-{{vm.selected.label}}">
+                <div class="flyout-container" ng-if="vm.selected">
+                  <div ng-repeat="section in vm.selected.sections | orderBy: \'sortOrder\'"
+                    ng-class="{ \'powerpanel-section-webpart-background\': section.useWebpartBackground }"
+                    class="powerpanel-section {{ section.layout }} fade1 section-container" ng-if="section.webparts.length">
+                    <div class="row">
+                      <div class="{{vm.getColumnWidth(section, 1)}}">
+                        <div ng-repeat="webpart in section.columns[0] | orderBy: \'sortOrder\'" class="powerpanel-webpart">
+                          <h1 class="powerpanel-title">{{webpart.label}}</h1>
+                          <div wizdom365-webpart webpart-name="webpart.webpartName" properties="webpart.properties"></div>
+                        </div>
+                      </div>
+                      <div class="{{vm.getColumnWidth(section, 2)}}">
+                        <div ng-repeat="webpart in section.columns[1] | orderBy: \'sortOrder\'" class="powerpanel-webpart">
+                          <div wizdom365-webpart webpart-name="webpart.webpartName" properties="webpart.properties"></div>
+                        </div>
+                      </div>
+                      <div class="{{vm.getColumnWidth(section, 3)}}">
+                        <div ng-repeat="webpart in section.columns[2] | orderBy: \'sortOrder\'" class="powerpanel-webpart">
+                          <div wizdom365-webpart webpart-name="webpart.webpartName" properties="webpart.properties"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="powerpanel-filler" ng-style="{ \'width\': vm.selected ? vm.selected.width : 0 }"></div>
+            `;
+
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();
+(function () {
+  try {
+    angular.module("Wizdom365").config([
+      "$provide",
+      function ($provide) {
+        $provide.decorator("wizdom365TemplatePickerDirective", [
+          "$delegate",
+          "webApiProxy",
+          function ($delegate, webApiProxy) {
+            const directive = $delegate[0];
+            const link = directive.link;
+
+            directive.compile = function () {
+              return function (scope) {
+                link.apply(this, arguments);
+
+                if (
+                  scope.directoryPath &&
+                  (scope.directoryPath.includes("PersonalLink") ||
+                    scope.directoryPath.includes("FAQ") ||
+                    scope.directoryPath.includes("ImageSlider") ||
+                    scope.directoryPath.includes("Poll"))
+                ) {
+                  webApiProxy.webpartTemplates
+                    .getViewTemplates(scope.directoryPath)
+                    .then(function (data) {
+                      const filteredData = [];
+                      scope.templates = [];
+
+                      for (let i = 0; i < data.length; i++) {
+                        const splittedPath = data[i].split("/");
+                        const templateName = splittedPath[
+                          splittedPath.length - 1
+                        ].split(".")[0];
+
+                        if (
+                          templateName &&
+                          (templateName.toLowerCase().includes("db ") ||
+                            templateName.toLowerCase().includes("danske"))
+                        ) {
+                          scope.templates.push({
+                            templatePath: data[i],
+                            templateName,
+                          });
+
+                          filteredData.push(data[i]);
+                        }
+                      }
+
+                      const selectedIndex = filteredData.indexOf(
+                        scope.templateUrl
+                      );
+
+                      selectedIndex >= 0
+                        ? (scope.selectedTemplate = filteredData[selectedIndex])
+                        : (scope.selectedTemplate = filteredData[0]);
+                    });
+                }
+              };
+            };
+
+            return $delegate;
+          },
+        ]);
+      },
+    ]);
+  } catch (e) {}
+})();

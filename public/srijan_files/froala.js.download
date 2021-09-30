@@ -1,0 +1,226 @@
+﻿(function() {
+    var froalaLoaded = false;
+    var providers = {};
+
+	var app = angular.module('ui.tinymce', []);
+	app.config(["$provide", "$compileProvider", function($provide, $compileProvider){
+        providers["$provide"] = $provide;
+        providers["$compileProvider"] = $compileProvider;
+    }]);
+    
+    app.directive("uiTinymce", ["$q", "$compile", "contextInfo", "$filter", function ($q, $compile, contextInfo, $filter) {
+		function loadScript(src) {
+			var deferred = $q.defer();
+			var script = document.createElement('script');
+			script.type = 'text/javascript';
+			script.src = src;
+			script.onload = script.onreadystatechange = deferred.resolve;
+			document.getElementsByTagName("head")[0].appendChild(script);
+			return deferred.promise;
+		}
+        function loadCss(src){
+            var elm = window.document.createElement("link");
+            elm.rel = "stylesheet";
+            elm.href = src;
+            document.getElementsByTagName("head")[0].appendChild(elm);
+        }
+        function overwriteConflictingSpStyles(){
+            var css = "button.fr-btn{min-width:0;}.fr-popup{z-index:1150 !important;}";
+            var style = document.createElement("style");
+            style.type = "text/css";
+            if (style.styleSheet) {
+                style.styleSheet.cssText = css;
+            } else {
+                style.appendChild(document.createTextNode(css));
+            }
+
+            document.getElementsByTagName("head")[0].appendChild(style);
+        }
+		function findCurrentFroalaLanguage()
+		{
+			var foalaSupportedLanguages = ["ar", "bs", "cs", "da", "de", "en_ca", "en_gb", "et", "es", "fa", "fi", "fr", "he", "hr", "hu", "id", "it", "ja", "ko", "me", "nb", "nl", "pl", "pt_br", "pt_pt", "ro", "ru", "sr", "sk", "sv", "th", "tr", "uk", "vi", "zh_cn", "zh_tw"];
+			var userLangWithRegionAndUnderscore = contextInfo.language.toLowerCase().replace("-","_");
+            var userLangOnly = contextInfo.language.toLowerCase().split('-')[0];
+            var detectedLanguage = 
+                _.find(foalaSupportedLanguages, function(val){ return val==userLangWithRegionAndUnderscore}) ||
+                _.find(foalaSupportedLanguages, function(val){return val==userLangOnly}) ||
+                null; // defaults to en_us, which is builtin
+			return detectedLanguage;
+		}
+
+        var deferredResourceLoading = $q.defer();       
+        loadCss(contextInfo.appUrl + "base/Scripts/froala/libs/font-awesome/4.4.0/css/font-awesome.min.css");
+        loadCss(contextInfo.appUrl + "base/Scripts/froala/froala-editor/css/froala_editor.pkgd.min.css?v2.9.3");
+        loadCss(contextInfo.appUrl + "base/Scripts/froala/froala-editor/css/froala_style.min.css?v2.9.3");
+		loadCss(contextInfo.appUrl + "base/Scripts/froala/libs/at.js/1.4.0/css/jquery.atwho.min.css");
+        loadCss(contextInfo.appUrl + "base/Scripts/froala/froala-editor/css/plugins/image.min.css?v2.9.3");
+
+        // fix sp styles
+        overwriteConflictingSpStyles();
+
+
+        $q.all([
+            loadScript(contextInfo.appUrl + "base/Scripts/froala/froala-editor/js/froala_editor.pkgd.min.js?v2.9.3"), // har embedded spell_checker.min som en del af froala_editor
+            loadScript(contextInfo.appUrl + "base/Scripts/froala/angular-froala/src/angular-froala.js")]
+        ).then(function(){findCurrentFroalaLanguage() && loadScript(contextInfo.appUrl + "base/Scripts/froala/froala-editor/js/languages/" + findCurrentFroalaLanguage() + ".js")})
+		 .then(function(){
+
+            // load everything from the froalaModule...
+            var invokeQueue = angular.module("froala")._invokeQueue;
+            for(var i =0;i<invokeQueue.length;i++){
+                var provider = providers[invokeQueue[i][0]]; 
+                var register = provider[invokeQueue[i][1]];
+                register.apply(provider, invokeQueue[i][2]);                                
+            }
+            deferredResourceLoading.resolve();
+        });
+
+        //var foalaSupportedLanguages = ["ar", "bs", "cs", "da", "de", "en_ca", "en_gb", "en_us", "et", "es", "fa", "fi", "fr", "he", "hr", "hu", "id", "it", "ja", "ko", "me", "nb", "nl", "pl", "pt_br", "pt_pt", "ro", "ru", "sr", "sk", "sv", "th", "tr", "uk", "vi", "zh_cn", "zh_tw"];
+        var spellCheckerSupportedLanguage = ['en_US', 'en_GB', 'pt_BR', 'da_DK', 'nl_NL', 'en_CA', 'fi_FI', 'fr_FR', 'fr_CA', 'de_DE', 'el_GR', 'it_IT', 'nb_NO', 'pt_PT', 'es_ES', 'sv_SE'];
+		return {
+            priority: 1000,
+            replace:true,
+            scope: { 
+                ngModel:"=ngModel",
+                toolbarbuttons: "=?",
+                toolbarConfiguration: "@?",
+                toolbarConfigurationOverride: "<?"
+            },
+            // normally $parent should'nt be used EVER, but the excuse here is due to $scope problems with ng-if and replace=true, which can't be fixed by using controllerAs
+            template: "<div ng-if=loaded><div ng-model='$parent.ngModel' froala='$parent.froalaoptions' /></div>",
+            controller: ["$scope", "webapiService", "$timeout", "configuration", function($scope, webapiService, $timeout, configuration){
+                deferredResourceLoading.promise.then(function(){
+                    var userLangWithRegionAndUnderscore = contextInfo.language.toLowerCase().replace("-","_");
+                    var userLangOnly = contextInfo.language.toLowerCase().split('-')[0];
+
+                    if ($scope.toolbarConfigurationOverride) $scope.toolbarConfiguration = $scope.toolbarConfigurationOverride;
+                    // spellcheck language
+                    var detectedSpellCheckLanguage = _.find(spellCheckerSupportedLanguage, function(val){return val.toLowerCase() == userLangWithRegionAndUnderscore});
+                    if($scope.toolbarConfiguration && configuration.Richtext[$scope.toolbarConfiguration] && (!detectedSpellCheckLanguage || configuration.Richtext[$scope.toolbarConfiguration].useCurrentLanguageForSpellChecking != "true")) // != "true", is not the same as ==false, as we need null to be treated as false also
+                        detectedSpellCheckLanguage = configuration.Richtext[$scope.toolbarConfiguration].defaultSpellCheckingLanguage;
+                    if(!detectedSpellCheckLanguage) // last fallback, will happen if no toolbarConfiguration is specified
+                        detectedSpellCheckLanguage = "en_US";
+
+                    $scope.froalaoptions = {
+                        imageUploadRemoteUrls: false,
+                        language: findCurrentFroalaLanguage(),
+                        requestWithCredentials : true,
+                        height: $scope.height, 
+						placeholderText  : "",	
+						key: "sC1D1A1A1lA6F6E5E3A1D3B11A3B5F4gSXSJ1LHAFJVCXCLS==",
+                        scaytCustomerId: configuration.Richtext.License.scayt,
+						scaytOptions : { //http://dev.webspellchecker.net/api/customscayt/SCAYT.CUSTOMSCAYT.html
+							spellcheckLang: detectedSpellCheckLanguage,
+                        },
+                        linkEditButtons: ['linkOpen', 'linkEdit', 'linkRemove'],
+                        imageEditButtons: ['imageReplace', 'imageAlign', 'imageCaption', 'imageRemove', '|', 'imageLink', 'linkOpen', 'linkEdit', 'linkRemove', '-', 'imageDisplay', 'imageAlt', 'imageSize'],
+						toolbarButtons : ['undo','redo','|','fullscreen','bold','italic','underline','|','paragraphFormat','formatOL','formatUL','|','quote','insertLink','insertImage','clearFormatting','print'],
+                        beforeUpload : function(e, editor, images){
+                            editor.opts.imageUploadURL = contextInfo.appUrl + "api/wizdom/365/froalaimageupload?sessionId=" + webapiService.getcorsProxySessionId() + "&userLoginName=" + contextInfo.userLoginName + "&SPHostUrl=" + contextInfo.spWebUrl;
+                        },
+						events:{
+							'froalaEditor.initialized': function (e, editor) {
+								// mentions
+								if(!$scope.mentioEnabled || !editor.$el.atwho)
+                                    return;
+
+                                var remoteFilterFunc = function(query, callback) {
+                                    console.log("search for: " + query);
+                                    if (query.length > 1) {
+                                        webapiService.get("api/wizdom/noticeboard/principals/searchAuthors?searchTerm=" + query).then(function (result) {
+                                            _.each(result, function (val) { return val.id = val.loginName }); // store loginName as id, so we can use it in the template
+                                            _.each(result, function (val) { return val.name = val.displayName });
+                                            callback(result);
+                                        });
+                                    }
+                                    else
+                                        callback([]);
+                                }
+
+								editor.$el
+									.atwho({
+										at: "@",
+										displayTpl: '<li loginName=${id}>${name} <small>${email}</small></li>',
+										limit: 200,
+										callbacks:{
+                                            remoteFilter: _.debounce(remoteFilterFunc, 800)
+										}
+									})
+									.on('inserted.atwho', function (atWhoEvent, $li, event) {
+										editor.$el.find('.atwho-inserted:not([loginname])').attr("loginname", $li.attr("loginName")); // "copy" the loginName from the selected item to the inserted html
+										editor.$el.find('.atwho-inserted').removeAttr('contenteditable');
+										editor.$el.find('.atwho-inserted').removeAttr('data-atwho-at-query');
+									})
+
+									editor.events.on('keydown', function (e) {
+										if (e.which == $.FroalaEditor.KEYCODE.ENTER && editor.$el.atwho('isSelecting')) {
+											return false;
+										}
+									}, true);
+                            },
+                            'froalaEditor.image.error': function (e, editor, error) {
+                                if (error.message) {
+                                    var msg = "";
+                                    // Bad link.
+                                    if (error.code == 1) { msg = $filter("translate")('Image cannot be loaded from the passed link.'); }
+                                    // No link in upload response.
+                                    else if (error.code == 2) { msg = $filter("translate")('No link in upload response.'); }
+                                    // Error during image upload.
+                                    else if (error.code == 3) { msg = $filter("translate")('Error during file upload.'); }
+                                    // Parsing response failed.
+                                    else if (error.code == 4) { msg = $filter("translate")('Parsing response failed.'); }
+                                    // Image too text-large.
+                                    else if (error.code == 5) { msg = $filter("translate")('File is too large.'); }
+                                    // Invalid image type.
+                                    else if (error.code == 6) { msg = $filter("translate")('Image file type is invalid.'); }
+                                    // Image can be uploaded only to same domain in IE 8 and IE 9.
+                                    else if (error.code == 7) { msg = $filter("translate")('Files can be uploaded only to same domain in IE 8 and IE 9.'); }
+                                    editor.popups.areVisible()
+                                        .find('.fr-image-progress-bar-layer.fr-error .fr-message')
+                                        .text(msg);
+                                }
+                            }
+						}
+                    };
+                    if($scope.toolbarbuttons)
+                        $scope.froalaoptions.toolbarButtons = $scope.toolbarbuttons; 
+                    if($scope.toolbarConfiguration){
+                        $scope.froalaoptions.toolbarButtons = configuration.Richtext[$scope.toolbarConfiguration].toolbar;
+                    }
+
+	                if ($scope.froalaoptions.toolbarButtons)
+		                $scope.froalaoptions.toolbarButtonsMD = 
+			                $scope.froalaoptions.toolbarButtonsSM =
+			                $scope.froalaoptions.toolbarButtonsXS = 
+								$scope.froalaoptions.toolbarButtons;
+
+                    $scope.loaded = true;
+                });
+                
+                $scope.$watchCollection("toolbarbuttons", function(){
+                    // used by the toolbar editor, for previewing
+                    if($scope.froalaoptions && $scope.toolbarbuttons){
+                        $scope.loaded = false;
+                        $timeout(function(){$scope.loaded = true;}, 0);
+                        $scope.froalaoptions.toolbarButtons = $scope.toolbarbuttons; 
+                    }
+                });;
+            }],
+			compile: function(element, attrs) {
+                // $(element).attr("class","");
+				var mentioEnabled = $(element)[0].hasAttribute("mentio");
+
+                $(element).removeAttr("mentio");
+                var height = $(element).height();
+				if(height<50)
+					height = null;
+                $(element).css({height:"inherit", padding:0, border:"none"});
+
+                return function($scope, $element, $attr) {
+					$scope.mentioEnabled = mentioEnabled;
+                    $scope.height = $scope.height || height;
+                };
+			}
+		};
+	}]);
+})();
